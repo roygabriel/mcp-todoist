@@ -223,6 +223,22 @@ func main() {
 	)
 	s.AddTool(batchCreateTasksTool, tools.BatchCreateTasksHandler(todoistSyncClient))
 
+	// Move tasks tool
+	moveTasksTool := mcp.NewTool("move_tasks",
+		mcp.WithDescription("Move multiple tasks to a different project (uses Sync API batching for >5 tasks)"),
+		mcp.WithArray("task_ids",
+			mcp.Description("Array of task IDs to move"),
+		),
+		mcp.WithString("filter",
+			mcp.Description("Todoist filter to select tasks to move (e.g., '@someday')"),
+		),
+		mcp.WithString("to_project_id",
+			mcp.Required(),
+			mcp.Description("Destination project ID"),
+		),
+	)
+	s.AddTool(moveTasksTool, tools.MoveTasksHandler(todoistClient, todoistSyncClient))
+
 	// Register project tools
 	listProjectsTool := mcp.NewTool("list_projects",
 		mcp.WithDescription("List all projects"),
@@ -444,7 +460,7 @@ func main() {
 	fmt.Fprintf(os.Stderr, "Connected to Todoist API successfully\n")
 	fmt.Fprintf(os.Stderr, "Rate limit: 450 requests per 15 minutes\n")
 	fmt.Fprintf(os.Stderr, "Sync API batching enabled for bulk operations\n")
-	fmt.Fprintf(os.Stderr, "Registered %d tools\n", 28)
+	fmt.Fprintf(os.Stderr, "Registered %d tools\n", 29)
 
 	// Start the stdio server
 	if err := server.ServeStdio(s); err != nil {

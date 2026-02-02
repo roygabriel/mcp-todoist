@@ -900,3 +900,156 @@ func BatchCreateTasksHandler(syncClient *todoist.SyncClient) func(context.Contex
 	}
 }
 
+// MoveTasksHandler creates a handler for moving multiple tasks to a different project
+func MoveTasksHandler(client *todoist.Client, syncClient *todoist.SyncClient) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+
+		// Validate to_project_id (required)
+		toProjectID, ok := args["to_project_id"].(string)
+		if !ok || toProjectID == "" {
+			return mcp.NewToolResultError("to_project_id is required"), nil
+		}
+
+		var taskIDs []string
+
+		// Get task IDs from filter if provided
+		if filter, ok := args["filter"].(string); ok && filter != "" {
+			// Use existing search logic to get task IDs from filter
+			params := url.Values{}
+			params.Set("filter", filter)
+			path := "/tasks?" + params.Encode()
+
+			respBody, err := client.Get(ctx, path)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to fetch tasks with filter: %v", err)), nil
+			}
+
+			var tasks []map[string]interface{}
+			if err := json.Unmarshal(respBody, &tasks); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to parse tasks: %v", err)), nil
+			}
+
+			for _, task := range tasks {
+				if id, ok := task["id"].(string); ok {
+					taskIDs = append(taskIDs, id)
+				}
+			}
+		}
+
+		// Get task IDs from array if provided (takes precedence if both provided)
+		if taskIDsParam, ok := args["task_ids"].([]interface{}); ok && len(taskIDsParam) > 0 {
+			taskIDs = make([]string, 0, len(taskIDsParam))
+			for _, id := range taskIDsParam {
+				if idStr, ok := id.(string); ok {
+					taskIDs = append(taskIDs, idStr)
+				}
+			}
+		}
+
+		if len(taskIDs) == 0 {
+			return mcp.NewToolResultError("either task_ids or filter must be provided and match at least one task"), nil
+		}
+
+		// Fetch destination project name for response
+		projectPath := fmt.Sprintf("/projects/%s", toProjectID)
+		projectResp, err := client.Get(ctx, projectPath)
+		var toProjectName string
+		if err == nil {
+			var project map[string]interface{}
+			if json.Unmarshal(projectResp, &project) == nil {
+				if name, ok := project["name"].(string); ok {
+					toProjectName = name
+				}
+			}
+		}
+		if toProjectName == "" {
+			toProjectName = toProjectID
+		}
+
+		var successCount int
+		var failedTasks []string
+		var usedBatching bool
+
+		// Use Sync API batching for larger operations (>5 tasks)
+		if len(taskIDs) > 5 {
+			usedBatching = true
+			
+			// Build commands for Sync API (item_update with project_id)
+			commands := make([]todoist.Command, len(taskIDs))
+			for i, taskID := range taskIDs {
+				commands[i] = todoist.Command{
+					Type: "item_update",
+					UUID: todoist.GenerateUUID(),
+					Args: map[string]interface{}{
+						"id":         taskID,
+						"project_id": toProjectID,
+					},
+				}
+			}
+
+			// Execute batch request
+			syncResp, err := syncClient.BatchCommands(ctx, commands)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to batch move tasks: %v", err)), nil
+			}
+
+			// Parse sync_status for success/failures
+			for i, cmd := range commands {
+				status := syncResp.SyncStatus[cmd.UUID]
+				if statusStr, ok := status.(string); ok && statusStr == "ok" {
+					successCount++
+				} else {
+					failedTasks = append(failedTasks, taskIDs[i])
+				}
+			}
+		} else {
+			// Use REST API for small batches (<=5 tasks)
+			usedBatching = false
+			
+			// Check rate limit capacity
+			remaining := client.GetRemainingRequests()
+			if remaining < len(taskIDs) {
+				return mcp.NewToolResultError(fmt.Sprintf("insufficient rate limit capacity: need %d requests, have %d remaining in 15min window", len(taskIDs), remaining)), nil
+			}
+
+			// Move tasks sequentially via REST API update
+			for _, taskID := range taskIDs {
+				path := fmt.Sprintf("/tasks/%s", taskID)
+				body := map[string]interface{}{
+					"project_id": toProjectID,
+				}
+				_, err := client.Post(ctx, path, body)
+				if err != nil {
+					failedTasks = append(failedTasks, taskID)
+					continue
+				}
+				successCount++
+			}
+		}
+
+		// Build response
+		response := map[string]interface{}{
+			"total_tasks":     len(taskIDs),
+			"moved":           successCount,
+			"failed":          len(failedTasks),
+			"failed_task_ids": failedTasks,
+			"to_project":      toProjectName,
+			"used_batching":   usedBatching,
+		}
+
+		if len(failedTasks) == 0 {
+			response["message"] = fmt.Sprintf("Successfully moved %d tasks to '%s'", successCount, toProjectName)
+		} else {
+			response["message"] = fmt.Sprintf("Moved %d of %d tasks to '%s' (%d failed)", successCount, len(taskIDs), toProjectName, len(failedTasks))
+		}
+
+		jsonData, err := json.MarshalIndent(response, "", "  ")
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to format response: %v", err)), nil
+		}
+
+		return mcp.NewToolResultText(string(jsonData)), nil
+	}
+}
+

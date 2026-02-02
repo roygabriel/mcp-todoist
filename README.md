@@ -445,9 +445,57 @@ This creates a parent task with two sub-tasks in a single API request. The `pare
 - Dramatically reduces rate limit consumption
 - Ideal for project setup, bulk imports, or creating task templates
 
+#### 12. move_tasks
+
+Move multiple tasks to a different project in a single operation.
+
+**Parameters:**
+- `task_ids` (optional) - Array of task IDs to move
+- `filter` (optional) - Todoist filter string to select tasks to move
+- `to_project_id` (required) - Destination project ID
+
+Note: Either `task_ids` or `filter` is required, but not both.
+
+**Example (by IDs):**
+```json
+{
+  "task_ids": ["7654321", "7654322", "7654323"],
+  "to_project_id": "2203306141"
+}
+```
+
+**Example (by filter):**
+```json
+{
+  "filter": "@someday",
+  "to_project_id": "2203306141"
+}
+```
+
+**Example Response:**
+```json
+{
+  "total_tasks": 15,
+  "moved": 15,
+  "failed": 0,
+  "failed_task_ids": [],
+  "to_project": "Backlog",
+  "used_batching": true,
+  "message": "Successfully moved 15 tasks to 'Backlog'"
+}
+```
+
+**Rate Limiting:** For more than 5 tasks, this tool automatically uses Sync API batching to move all tasks in a single request instead of one request per task.
+
+**Benefits:**
+- Organize tasks by moving them between projects in bulk
+- Automatically selects optimal API (REST vs Sync) based on task count
+- Supports filter-based selection for flexible task targeting
+- Minimal API calls through intelligent batching
+
 ### Projects
 
-#### 12. list_projects
+#### 13. list_projects
 
 List all projects.
 
@@ -497,7 +545,7 @@ Get details for a single project.
 **Parameters:**
 - `project_id` (required) - Project ID to retrieve
 
-#### 15. update_project
+#### 16. update_project
 
 Update an existing project.
 
@@ -505,7 +553,7 @@ Update an existing project.
 - `project_id` (required) - Project ID to update
 - All other parameters from create_project (optional)
 
-#### 16. delete_project
+#### 17. delete_project
 
 Delete a project and all its tasks.
 
@@ -514,14 +562,14 @@ Delete a project and all its tasks.
 
 ### Sections
 
-#### 17. list_sections
+#### 18. list_sections
 
 List sections, optionally filtered by project.
 
 **Parameters:**
 - `project_id` (optional) - Filter by project ID
 
-#### 18. create_section
+#### 19. create_section
 
 Create a new section in a project.
 
@@ -547,13 +595,13 @@ Delete a section.
 
 ### Labels
 
-#### 21. list_labels
+#### 22. list_labels
 
 List all personal labels.
 
 **Parameters:** None
 
-#### 22. create_label
+#### 23. create_label
 
 Create a new personal label.
 
@@ -563,7 +611,7 @@ Create a new personal label.
 - `order` (optional) - Label order
 - `is_favorite` (optional) - Whether label is a favorite
 
-#### 23. update_label
+#### 24. update_label
 
 Update a personal label.
 
@@ -571,7 +619,7 @@ Update a personal label.
 - `label_id` (required) - Label ID to update
 - All other parameters from create_label (optional)
 
-#### 24. delete_label
+#### 25. delete_label
 
 Delete a personal label.
 
@@ -580,7 +628,7 @@ Delete a personal label.
 
 ### Comments
 
-#### 25. get_comments
+#### 26. get_comments
 
 Get comments for a task or project.
 
@@ -590,7 +638,7 @@ Get comments for a task or project.
 
 Note: Either `task_id` or `project_id` is required.
 
-#### 26. add_comment
+#### 27. add_comment
 
 Add a comment to a task or project.
 
@@ -601,7 +649,7 @@ Add a comment to a task or project.
 
 Note: Either `task_id` or `project_id` is required.
 
-#### 27. update_comment
+#### 28. update_comment
 
 Update a comment.
 
@@ -609,7 +657,7 @@ Update a comment.
 - `comment_id` (required) - Comment ID to update
 - `content` (required) - New comment content
 
-#### 28. delete_comment
+#### 29. delete_comment
 
 Delete a comment.
 
