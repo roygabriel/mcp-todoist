@@ -1,0 +1,31 @@
+# Environment variables
+.env
+
+# Build artifacts
+mcp-todoist
+mcp-todoist-*
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binaries
+*.test
+
+# Coverage files
+*.out
+*.prof
+
+# Go workspace file
+go.work
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
