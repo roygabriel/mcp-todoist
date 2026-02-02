@@ -624,7 +624,7 @@ func GetTaskStatsHandler(client *todoist.Client) func(context.Context, mcp.CallT
 }
 
 // BulkCompleteTasksHandler creates a handler for completing multiple tasks
-func BulkCompleteTasksHandler(client *todoist.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func BulkCompleteTasksHandler(client *todoist.Client, syncClient *todoist.SyncClient) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 
@@ -667,24 +667,61 @@ func BulkCompleteTasksHandler(client *todoist.Client) func(context.Context, mcp.
 			return mcp.NewToolResultError("either task_ids or filter must be provided and match at least one task"), nil
 		}
 
-		// Check rate limit capacity
-		remaining := client.GetRemainingRequests()
-		if remaining < len(taskIDs) {
-			return mcp.NewToolResultError(fmt.Sprintf("insufficient rate limit capacity: need %d requests, have %d remaining in 15min window", len(taskIDs), remaining)), nil
-		}
+		var successCount int
+		var failedTasks []string
+		var usedBatching bool
 
-		// Complete tasks sequentially
-		successCount := 0
-		failedTasks := []string{}
-
-		for _, taskID := range taskIDs {
-			path := fmt.Sprintf("/tasks/%s/close", taskID)
-			_, err := client.Post(ctx, path, nil)
-			if err != nil {
-				failedTasks = append(failedTasks, taskID)
-				continue
+		// Use Sync API batching for larger operations (>5 tasks)
+		if len(taskIDs) > 5 {
+			usedBatching = true
+			
+			// Build commands for Sync API
+			commands := make([]todoist.Command, len(taskIDs))
+			for i, taskID := range taskIDs {
+				commands[i] = todoist.Command{
+					Type: "item_close",
+					UUID: todoist.GenerateUUID(),
+					Args: map[string]interface{}{
+						"id": taskID,
+					},
+				}
 			}
-			successCount++
+
+			// Execute batch request
+			syncResp, err := syncClient.BatchCommands(ctx, commands)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to batch complete tasks: %v", err)), nil
+			}
+
+			// Parse sync_status for success/failures
+			for i, cmd := range commands {
+				status := syncResp.SyncStatus[cmd.UUID]
+				if statusStr, ok := status.(string); ok && statusStr == "ok" {
+					successCount++
+				} else {
+					failedTasks = append(failedTasks, taskIDs[i])
+				}
+			}
+		} else {
+			// Use REST API for small batches (<=5 tasks)
+			usedBatching = false
+			
+			// Check rate limit capacity
+			remaining := client.GetRemainingRequests()
+			if remaining < len(taskIDs) {
+				return mcp.NewToolResultError(fmt.Sprintf("insufficient rate limit capacity: need %d requests, have %d remaining in 15min window", len(taskIDs), remaining)), nil
+			}
+
+			// Complete tasks sequentially
+			for _, taskID := range taskIDs {
+				path := fmt.Sprintf("/tasks/%s/close", taskID)
+				_, err := client.Post(ctx, path, nil)
+				if err != nil {
+					failedTasks = append(failedTasks, taskID)
+					continue
+				}
+				successCount++
+			}
 		}
 
 		// Build response
@@ -693,6 +730,7 @@ func BulkCompleteTasksHandler(client *todoist.Client) func(context.Context, mcp.
 			"completed":       successCount,
 			"failed":          len(failedTasks),
 			"failed_task_ids": failedTasks,
+			"used_batching":   usedBatching,
 		}
 
 		if len(failedTasks) == 0 {
@@ -709,3 +747,156 @@ func BulkCompleteTasksHandler(client *todoist.Client) func(context.Context, mcp.
 		return mcp.NewToolResultText(string(jsonData)), nil
 	}
 }
+
+// BatchCreateTasksHandler creates a handler for creating multiple tasks in one batch
+func BatchCreateTasksHandler(syncClient *todoist.SyncClient) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+
+		// Extract tasks array
+		tasksParam, ok := args["tasks"].([]interface{})
+		if !ok || len(tasksParam) == 0 {
+			return mcp.NewToolResultError("tasks array is required and must contain at least one task"), nil
+		}
+
+		// Build commands for Sync API
+		commands := make([]todoist.Command, 0, len(tasksParam))
+		tempIDs := make([]string, len(tasksParam))
+
+		for i, taskParam := range tasksParam {
+			taskMap, ok := taskParam.(map[string]interface{})
+			if !ok {
+				return mcp.NewToolResultError(fmt.Sprintf("task at index %d is not a valid object", i)), nil
+			}
+
+			// Validate required content field
+			content, ok := taskMap["content"].(string)
+			if !ok || content == "" {
+				return mcp.NewToolResultError(fmt.Sprintf("task at index %d missing required 'content' field", i)), nil
+			}
+
+			// Generate temp ID for this task
+			tempID := todoist.GenerateTempID()
+			tempIDs[i] = tempID
+
+			// Build command args
+			cmdArgs := map[string]interface{}{
+				"content": content,
+			}
+
+			// Add optional fields
+			if description, ok := taskMap["description"].(string); ok && description != "" {
+				cmdArgs["description"] = description
+			}
+			if projectID, ok := taskMap["project_id"].(string); ok && projectID != "" {
+				cmdArgs["project_id"] = projectID
+			}
+			if sectionID, ok := taskMap["section_id"].(string); ok && sectionID != "" {
+				cmdArgs["section_id"] = sectionID
+			}
+			if labels, ok := taskMap["labels"].([]interface{}); ok && len(labels) > 0 {
+				labelStrs := make([]string, 0, len(labels))
+				for _, l := range labels {
+					if labelStr, ok := l.(string); ok {
+						labelStrs = append(labelStrs, labelStr)
+					}
+				}
+				if len(labelStrs) > 0 {
+					cmdArgs["labels"] = labelStrs
+				}
+			}
+			if priority, ok := taskMap["priority"].(float64); ok {
+				p := int(priority)
+				if p >= 1 && p <= 4 {
+					cmdArgs["priority"] = p
+				}
+			}
+			if dueString, ok := taskMap["due_string"].(string); ok && dueString != "" {
+				cmdArgs["due_string"] = dueString
+			}
+			if dueDate, ok := taskMap["due_date"].(string); ok && dueDate != "" {
+				cmdArgs["due_date"] = dueDate
+			}
+
+			// Handle parent_temp_id - reference to another task in same batch
+			if parentTempIDRef, ok := taskMap["parent_temp_id"].(string); ok && parentTempIDRef != "" {
+				// Parse as index or direct temp_id
+				var parentIdx int
+				if _, err := fmt.Sscanf(parentTempIDRef, "%d", &parentIdx); err == nil {
+					// It's an index
+					if parentIdx >= 0 && parentIdx < len(tempIDs) && parentIdx < i {
+						cmdArgs["parent_id"] = tempIDs[parentIdx]
+					}
+				} else {
+					// It's a direct temp_id reference
+					cmdArgs["parent_id"] = parentTempIDRef
+				}
+			} else if parentID, ok := taskMap["parent_id"].(string); ok && parentID != "" {
+				// Direct parent_id (existing task)
+				cmdArgs["parent_id"] = parentID
+			}
+
+			// Create command
+			commands = append(commands, todoist.Command{
+				Type:   "item_add",
+				UUID:   todoist.GenerateUUID(),
+				TempID: tempID,
+				Args:   cmdArgs,
+			})
+		}
+
+		// Execute batch request
+		syncResp, err := syncClient.BatchCommands(ctx, commands)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to batch create tasks: %v", err)), nil
+		}
+
+		// Parse results
+		createdTasks := make([]map[string]interface{}, 0)
+		failedIndices := make([]int, 0)
+
+		for i, cmd := range commands {
+			status := syncResp.SyncStatus[cmd.UUID]
+			if statusStr, ok := status.(string); ok && statusStr == "ok" {
+				// Task created successfully
+				taskInfo := map[string]interface{}{
+					"index":   i,
+					"temp_id": cmd.TempID,
+				}
+				// Get real ID from mapping
+				if realID, ok := syncResp.TempIDMapping[cmd.TempID]; ok {
+					taskInfo["id"] = realID
+				}
+				taskInfo["content"] = cmd.Args["content"]
+				createdTasks = append(createdTasks, taskInfo)
+			} else {
+				// Task creation failed
+				failedIndices = append(failedIndices, i)
+			}
+		}
+
+		// Build response
+		response := map[string]interface{}{
+			"total_tasks":     len(commands),
+			"created":         len(createdTasks),
+			"failed":          len(failedIndices),
+			"failed_indices":  failedIndices,
+			"created_tasks":   createdTasks,
+			"temp_id_mapping": syncResp.TempIDMapping,
+		}
+
+		if len(failedIndices) == 0 {
+			response["message"] = fmt.Sprintf("Successfully created %d tasks in a single batch", len(createdTasks))
+		} else {
+			response["message"] = fmt.Sprintf("Created %d of %d tasks (%d failed)", len(createdTasks), len(commands), len(failedIndices))
+		}
+
+		jsonData, err := json.MarshalIndent(response, "", "  ")
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to format response: %v", err)), nil
+		}
+
+		return mcp.NewToolResultText(string(jsonData)), nil
+	}
+}
+

@@ -20,8 +20,9 @@ func main() {
 		log.Fatalf("Configuration error: %v", err)
 	}
 
-	// Create Todoist client
+	// Create Todoist clients
 	todoistClient := todoist.NewClient(cfg.TodoistAPIToken)
+	todoistSyncClient := todoist.NewSyncClient(cfg.TodoistAPIToken)
 
 	// Test connection
 	ctx := context.Background()
@@ -202,7 +203,7 @@ func main() {
 
 	// Bulk complete tasks tool
 	bulkCompleteTasksTool := mcp.NewTool("bulk_complete_tasks",
-		mcp.WithDescription("Complete multiple tasks by IDs or filter string (respects rate limits)"),
+		mcp.WithDescription("Complete multiple tasks by IDs or filter string (uses Sync API batching for >5 tasks)"),
 		mcp.WithArray("task_ids",
 			mcp.Description("Array of task IDs to complete"),
 		),
@@ -210,7 +211,17 @@ func main() {
 			mcp.Description("Todoist filter to select tasks to complete (e.g., 'today & p1')"),
 		),
 	)
-	s.AddTool(bulkCompleteTasksTool, tools.BulkCompleteTasksHandler(todoistClient))
+	s.AddTool(bulkCompleteTasksTool, tools.BulkCompleteTasksHandler(todoistClient, todoistSyncClient))
+
+	// Batch create tasks tool
+	batchCreateTasksTool := mcp.NewTool("batch_create_tasks",
+		mcp.WithDescription("Create multiple tasks in a single batch request (uses Sync API for efficiency)"),
+		mcp.WithArray("tasks",
+			mcp.Required(),
+			mcp.Description("Array of task objects with 'content' (required) and optional fields"),
+		),
+	)
+	s.AddTool(batchCreateTasksTool, tools.BatchCreateTasksHandler(todoistSyncClient))
 
 	// Register project tools
 	listProjectsTool := mcp.NewTool("list_projects",
@@ -432,7 +443,8 @@ func main() {
 	fmt.Fprintf(os.Stderr, "Todoist MCP Server v1.0.0 starting...\n")
 	fmt.Fprintf(os.Stderr, "Connected to Todoist API successfully\n")
 	fmt.Fprintf(os.Stderr, "Rate limit: 450 requests per 15 minutes\n")
-	fmt.Fprintf(os.Stderr, "Registered %d tools\n", 27)
+	fmt.Fprintf(os.Stderr, "Sync API batching enabled for bulk operations\n")
+	fmt.Fprintf(os.Stderr, "Registered %d tools\n", 28)
 
 	// Start the stdio server
 	if err := server.ServeStdio(s); err != nil {

@@ -357,11 +357,97 @@ Note: Either `task_ids` or `filter` is required.
 }
 ```
 
-**Rate Limiting:** This operation makes one API call per task. Large bulk operations may approach the rate limit (450 requests per 15 minutes).
+**Rate Limiting:** For more than 5 tasks, this tool automatically uses Sync API batching to complete all tasks in a single request instead of one request per task.
+
+#### 11. batch_create_tasks
+
+Create multiple tasks in a single batch request for maximum efficiency.
+
+**Parameters:**
+- `tasks` (required) - Array of task objects
+
+Each task object can include:
+- `content` (required) - Task title
+- `description` (optional) - Task description
+- `project_id` (optional) - Project ID
+- `section_id` (optional) - Section ID
+- `labels` (optional) - Array of label names
+- `priority` (optional) - Priority 1-4
+- `due_string` (optional) - Natural language due date
+- `due_date` (optional) - Due date in YYYY-MM-DD format
+- `parent_temp_id` (optional) - Reference another task in the batch by index (e.g., "0" for first task)
+- `parent_id` (optional) - Existing task ID to use as parent
+
+**Example (independent tasks):**
+```json
+{
+  "tasks": [
+    {
+      "content": "Buy groceries",
+      "priority": 3,
+      "due_string": "tomorrow"
+    },
+    {
+      "content": "Call dentist",
+      "priority": 4,
+      "due_string": "today"
+    },
+    {
+      "content": "Review report",
+      "priority": 2
+    }
+  ]
+}
+```
+
+**Example (with parent-child relationships):**
+```json
+{
+  "tasks": [
+    {
+      "content": "Project Planning",
+      "priority": 4
+    },
+    {
+      "content": "Research phase",
+      "parent_temp_id": "0",
+      "priority": 3
+    },
+    {
+      "content": "Implementation",
+      "parent_temp_id": "0",
+      "priority": 2
+    }
+  ]
+}
+```
+
+This creates a parent task with two sub-tasks in a single API request. The `parent_temp_id: "0"` references the first task (index 0) in the batch.
+
+**Example Response:**
+```json
+{
+  "total_tasks": 3,
+  "created": 3,
+  "failed": 0,
+  "created_tasks": [
+    {"index": 0, "id": "7654321", "content": "Project Planning"},
+    {"index": 1, "id": "7654322", "content": "Research phase"},
+    {"index": 2, "id": "7654323", "content": "Implementation"}
+  ],
+  "message": "Successfully created 3 tasks in a single batch"
+}
+```
+
+**Benefits:**
+- Creates any number of tasks in a single API request
+- Supports parent-child task relationships within the batch
+- Dramatically reduces rate limit consumption
+- Ideal for project setup, bulk imports, or creating task templates
 
 ### Projects
 
-#### 11. list_projects
+#### 12. list_projects
 
 List all projects.
 
@@ -383,7 +469,7 @@ List all projects.
 }
 ```
 
-#### 12. create_project
+#### 13. create_project
 
 Create a new project.
 
@@ -404,14 +490,14 @@ Create a new project.
 }
 ```
 
-#### 13. get_project
+#### 14. get_project
 
 Get details for a single project.
 
 **Parameters:**
 - `project_id` (required) - Project ID to retrieve
 
-#### 14. update_project
+#### 15. update_project
 
 Update an existing project.
 
@@ -419,7 +505,7 @@ Update an existing project.
 - `project_id` (required) - Project ID to update
 - All other parameters from create_project (optional)
 
-#### 15. delete_project
+#### 16. delete_project
 
 Delete a project and all its tasks.
 
@@ -428,14 +514,14 @@ Delete a project and all its tasks.
 
 ### Sections
 
-#### 16. list_sections
+#### 17. list_sections
 
 List sections, optionally filtered by project.
 
 **Parameters:**
 - `project_id` (optional) - Filter by project ID
 
-#### 17. create_section
+#### 18. create_section
 
 Create a new section in a project.
 
@@ -444,7 +530,7 @@ Create a new section in a project.
 - `project_id` (required) - Project ID
 - `order` (optional) - Section order
 
-#### 18. update_section
+#### 19. update_section
 
 Update a section name.
 
@@ -452,7 +538,7 @@ Update a section name.
 - `section_id` (required) - Section ID to update
 - `name` (required) - New section name
 
-#### 19. delete_section
+#### 20. delete_section
 
 Delete a section.
 
@@ -461,13 +547,13 @@ Delete a section.
 
 ### Labels
 
-#### 20. list_labels
+#### 21. list_labels
 
 List all personal labels.
 
 **Parameters:** None
 
-#### 21. create_label
+#### 22. create_label
 
 Create a new personal label.
 
@@ -477,7 +563,7 @@ Create a new personal label.
 - `order` (optional) - Label order
 - `is_favorite` (optional) - Whether label is a favorite
 
-#### 22. update_label
+#### 23. update_label
 
 Update a personal label.
 
@@ -485,7 +571,7 @@ Update a personal label.
 - `label_id` (required) - Label ID to update
 - All other parameters from create_label (optional)
 
-#### 23. delete_label
+#### 24. delete_label
 
 Delete a personal label.
 
@@ -494,7 +580,7 @@ Delete a personal label.
 
 ### Comments
 
-#### 24. get_comments
+#### 25. get_comments
 
 Get comments for a task or project.
 
@@ -504,7 +590,7 @@ Get comments for a task or project.
 
 Note: Either `task_id` or `project_id` is required.
 
-#### 25. add_comment
+#### 26. add_comment
 
 Add a comment to a task or project.
 
@@ -515,7 +601,7 @@ Add a comment to a task or project.
 
 Note: Either `task_id` or `project_id` is required.
 
-#### 26. update_comment
+#### 27. update_comment
 
 Update a comment.
 
@@ -523,7 +609,7 @@ Update a comment.
 - `comment_id` (required) - Comment ID to update
 - `content` (required) - New comment content
 
-#### 27. delete_comment
+#### 28. delete_comment
 
 Delete a comment.
 
@@ -596,11 +682,33 @@ For more filter examples, see the [Todoist filters documentation](https://todois
 
 ## Rate Limiting
 
-The Todoist API has a rate limit of **450 requests per 15 minutes**. This MCP server automatically tracks your requests and will return an error if you approach the limit.
+The Todoist API has different rate limits depending on which endpoint is used:
+
+### REST API v2
+- **450 requests per 15 minutes** for REST endpoints
+- Used by most tools (search, get, create, update, delete individual items)
+- The server automatically tracks requests and returns an error if approaching the limit
+
+### Sync API v1 (Command Batching)
+- **Multiple operations in a single request** - dramatically reduces API calls
+- Automatically used by:
+  - `bulk_complete_tasks` - when completing more than 5 tasks
+  - `batch_create_tasks` - for creating multiple tasks at once
+- Benefits: 100 tasks completed = 1 API request instead of 100
+
+**Example efficiency gains:**
+
+| Operation | Tasks | REST API v2 | Sync API Batching |
+|-----------|-------|-------------|-------------------|
+| Complete  | 2     | 2 requests  | 2 requests        |
+| Complete  | 10    | 10 requests | 1 request         |
+| Complete  | 100   | 100 requests| 1 request         |
+| Create    | 20    | 20 requests | 1 request         |
 
 **Tips to stay within limits:**
 - Use filters to narrow down search results instead of fetching all tasks
-- Batch operations when possible
+- Use `batch_create_tasks` or `bulk_complete_tasks` for multiple operations
+- The server automatically chooses the most efficient API based on operation size
 - Avoid polling for updates frequently
 
 If you hit the rate limit, wait for the 15-minute window to reset before making more requests.
@@ -693,10 +801,15 @@ npx @modelcontextprotocol/inspector mcp-todoist
 
 The server consists of:
 
-- **Todoist Client** (`todoist/client.go`) - HTTP client wrapper with rate limiting
+- **REST API Client** (`todoist/client.go`) - HTTP client wrapper for REST API v2 with rate limiting
+- **Sync API Client** (`todoist/sync_client.go`) - Sync API v1 client for command batching
 - **Configuration** (`config/config.go`) - Environment variable loading and validation
 - **Tool Handlers** (`tools/*.go`) - MCP tool implementations for each operation
 - **Main Server** (`main.go`) - MCP server initialization and tool registration
+
+The server intelligently uses both APIs:
+- **REST API v2** for individual operations (search, get, create, update, delete)
+- **Sync API v1 batching** for bulk operations (bulk_complete_tasks with >5 tasks, batch_create_tasks)
 
 ## Dependencies
 
