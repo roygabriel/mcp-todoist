@@ -7,6 +7,9 @@ Built with Go using the official [mcp-go SDK](https://mcp-go.dev) and works on a
 ## Features
 
 - **Task Management** - Create, update, complete, reopen, delete, and search tasks with filters
+- **Quick Add** - Use Todoist's natural syntax to quickly create tasks with inline #project @label p1-p4 tags
+- **Task Statistics** - Get aggregate stats by project, priority, today, and overdue
+- **Bulk Operations** - Complete multiple tasks at once with rate limit awareness
 - **Projects** - List, create, update, and delete projects with support for sub-projects
 - **Sections** - Organize tasks within projects using sections
 - **Labels** - Create and manage personal labels for task organization
@@ -267,9 +270,98 @@ Delete a task permanently.
 **Parameters:**
 - `task_id` (required) - Task ID to delete
 
+#### 8. quick_add_task
+
+Quick add a task using Todoist's natural syntax with inline parsing.
+
+**Parameters:**
+- `content` (required) - Task content with inline syntax
+
+**Syntax:**
+- `#ProjectName` - Assign to project
+- `@label` - Add label(s)
+- `p1`, `p2`, `p3`, `p4` - Set priority (p1=urgent, p4=normal)
+- Natural language dates - "tomorrow", "next monday at 3pm"
+
+**Example:**
+```json
+{
+  "content": "Buy milk #Shopping @groceries p1 tomorrow at 9am"
+}
+```
+
+This parses to:
+- Task: "Buy milk"
+- Project: Shopping
+- Labels: ["groceries"]
+- Priority: 4 (p1/urgent)
+- Due: tomorrow at 9am
+
+#### 9. get_task_stats
+
+Get aggregate statistics about your tasks.
+
+**Parameters:** None
+
+**Example Response:**
+```json
+{
+  "total_active": 47,
+  "today": 12,
+  "overdue": 3,
+  "by_priority": {
+    "p1": 5,
+    "p2": 10,
+    "p3": 15,
+    "p4": 17
+  },
+  "by_project": {
+    "Work": 25,
+    "Personal": 15,
+    "Shopping": 7
+  }
+}
+```
+
+#### 10. bulk_complete_tasks
+
+Complete multiple tasks at once using task IDs or a filter.
+
+**Parameters:**
+- `task_ids` (optional) - Array of task IDs to complete
+- `filter` (optional) - Todoist filter to select tasks
+
+Note: Either `task_ids` or `filter` is required.
+
+**Example (by IDs):**
+```json
+{
+  "task_ids": ["7654321", "7654322", "7654323"]
+}
+```
+
+**Example (by filter):**
+```json
+{
+  "filter": "today & p4"
+}
+```
+
+**Example Response:**
+```json
+{
+  "total_tasks": 15,
+  "completed": 15,
+  "failed": 0,
+  "message": "Successfully completed 15 tasks"
+}
+```
+
+**Rate Limiting:** This operation makes one API call per task. Large bulk operations may approach the rate limit (450 requests per 15 minutes).
+
 ### Projects
 
-#### 8. list_projects
+#### 11. list_projects
 
 List all projects.
 
@@ -291,7 +383,7 @@ List all projects.
 }
 ```
 
-#### 9. create_project
+#### 12. create_project
 
 Create a new project.
 
@@ -312,14 +404,14 @@ Create a new project.
 }
 ```
 
-#### 10. get_project
+#### 13. get_project
 
 Get details for a single project.
 
 **Parameters:**
 - `project_id` (required) - Project ID to retrieve
 
-#### 11. update_project
+#### 14. update_project
 
 Update an existing project.
 
@@ -327,7 +419,7 @@ Update an existing project.
 - `project_id` (required) - Project ID to update
 - All other parameters from create_project (optional)
 
-#### 12. delete_project
+#### 15. delete_project
 
 Delete a project and all its tasks.
 
@@ -336,14 +428,14 @@ Delete a project and all its tasks.
 
 ### Sections
 
-#### 13. list_sections
+#### 16. list_sections
 
 List sections, optionally filtered by project.
 
 **Parameters:**
 - `project_id` (optional) - Filter by project ID
 
-#### 14. create_section
+#### 17. create_section
 
 Create a new section in a project.
 
@@ -352,7 +444,7 @@ Create a new section in a project.
 - `project_id` (required) - Project ID
 - `order` (optional) - Section order
 
-#### 15. update_section
+#### 18. update_section
 
 Update a section name.
 
@@ -360,7 +452,7 @@ Update a section name.
 - `section_id` (required) - Section ID to update
 - `name` (required) - New section name
 
-#### 16. delete_section
+#### 19. delete_section
 
 Delete a section.
 
@@ -369,13 +461,13 @@ Delete a section.
 
 ### Labels
 
-#### 17. list_labels
+#### 20. list_labels
 
 List all personal labels.
 
 **Parameters:** None
 
-#### 18. create_label
+#### 21. create_label
 
 Create a new personal label.
 
@@ -385,7 +477,7 @@ Create a new personal label.
 - `order` (optional) - Label order
 - `is_favorite` (optional) - Whether label is a favorite
 
-#### 19. update_label
+#### 22. update_label
 
 Update a personal label.
 
@@ -393,7 +485,7 @@ Update a personal label.
 - `label_id` (required) - Label ID to update
 - All other parameters from create_label (optional)
 
-#### 20. delete_label
+#### 23. delete_label
 
 Delete a personal label.
 
@@ -402,7 +494,7 @@ Delete a personal label.
 
 ### Comments
 
-#### 21. get_comments
+#### 24. get_comments
 
 Get comments for a task or project.
 
@@ -412,7 +504,7 @@ Get comments for a task or project.
 
 Note: Either `task_id` or `project_id` is required.
 
-#### 22. add_comment
+#### 25. add_comment
 
 Add a comment to a task or project.
 
@@ -423,7 +515,7 @@ Add a comment to a task or project.
 
 Note: Either `task_id` or `project_id` is required.
 
-#### 23. update_comment
+#### 26. update_comment
 
 Update a comment.
 
@@ -431,7 +523,7 @@ Update a comment.
 - `comment_id` (required) - Comment ID to update
 - `content` (required) - New comment content
 
-#### 24. delete_comment
+#### 27. delete_comment
 
 Delete a comment.
 

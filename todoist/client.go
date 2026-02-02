@@ -166,3 +166,22 @@ func (c *Client) TestConnection(ctx context.Context) error {
 	}
 	return nil
 }
+
+// GetRemainingRequests returns how many requests are available in current window
+func (c *Client) GetRemainingRequests() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	
+	now := time.Now()
+	cutoff := now.Add(-rateLimitWindow)
+	
+	// Count valid requests in current window
+	validCount := 0
+	for _, t := range c.requestTimes {
+		if t.After(cutoff) {
+			validCount++
+		}
+	}
+	
+	return maxRequests - validCount
+}

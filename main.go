@@ -184,6 +184,34 @@ func main() {
 	)
 	s.AddTool(deleteTaskTool, tools.DeleteTaskHandler(todoistClient))
 
+	// Quick add task tool
+	quickAddTaskTool := mcp.NewTool("quick_add_task",
+		mcp.WithDescription("Quick add task using Todoist syntax: #project @label p1-p4 due date"),
+		mcp.WithString("content",
+			mcp.Required(),
+			mcp.Description("Task content with inline syntax: 'Buy milk #Shopping @groceries p1 tomorrow'"),
+		),
+	)
+	s.AddTool(quickAddTaskTool, tools.QuickAddTaskHandler(todoistClient))
+
+	// Get task stats tool
+	getTaskStatsTool := mcp.NewTool("get_task_stats",
+		mcp.WithDescription("Get aggregate statistics about tasks (by project, priority, today, overdue)"),
+	)
+	s.AddTool(getTaskStatsTool, tools.GetTaskStatsHandler(todoistClient))
+
+	// Bulk complete tasks tool
+	bulkCompleteTasksTool := mcp.NewTool("bulk_complete_tasks",
+		mcp.WithDescription("Complete multiple tasks by IDs or filter string (respects rate limits)"),
+		mcp.WithArray("task_ids",
+			mcp.Description("Array of task IDs to complete"),
+		),
+		mcp.WithString("filter",
+			mcp.Description("Todoist filter to select tasks to complete (e.g., 'today & p1')"),
+		),
+	)
+	s.AddTool(bulkCompleteTasksTool, tools.BulkCompleteTasksHandler(todoistClient))
+
 	// Register project tools
 	listProjectsTool := mcp.NewTool("list_projects",
 		mcp.WithDescription("List all projects"),
@@ -404,7 +432,7 @@ func main() {
 	fmt.Fprintf(os.Stderr, "Todoist MCP Server v1.0.0 starting...\n")
 	fmt.Fprintf(os.Stderr, "Connected to Todoist API successfully\n")
 	fmt.Fprintf(os.Stderr, "Rate limit: 450 requests per 15 minutes\n")
-	fmt.Fprintf(os.Stderr, "Registered %d tools\n", 24)
+	fmt.Fprintf(os.Stderr, "Registered %d tools\n", 27)
 
 	// Start the stdio server
 	if err := server.ServeStdio(s); err != nil {
