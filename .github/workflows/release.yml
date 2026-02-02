@@ -1,0 +1,202 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            output: mcp-todoist-linux-amd64
+          - os: linux
+            arch: arm64
+            output: mcp-todoist-linux-arm64
+          - os: darwin
+            arch: amd64
+            output: mcp-todoist-macos-amd64
+          - os: darwin
+            arch: arm64
+            output: mcp-todoist-macos-arm64
+          - os: windows
+            arch: amd64
+            output: mcp-todoist-windows-amd64.exe
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Get dependencies
+        run: go mod download
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: 0
+        run: |
+          go build -ldflags="-s -w" -o ${{ matrix.output }} .
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output }}
+          path: ${{ matrix.output }}
+          retention-days: 1
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./binaries
+
+      - name: Display structure of downloaded files
+        run: ls -R ./binaries
+
+      - name: Create checksums
+        run: |
+          cd binaries
+          for dir in */; do
+            cd "$dir"
+            for file in *; do
+              sha256sum "$file" > "${file}.sha256"
+            done
+            cd ..
+          done
+          cd ..
+
+      - name: Get version
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get_version.outputs.version }}
+          name: Release ${{ steps.get_version.outputs.version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            binaries/**/*
+          body: |
+            ## Todoist MCP Server ${{ steps.get_version.outputs.version }}
+            
+            Model Context Protocol server for Todoist integration using REST API v2.
+            
+            ### Features
+            - ✅ Task management (create, update, complete, search with filters)
+            - ✅ Project management (list, create, update, delete)
+            - ✅ Section organization within projects
+            - ✅ Label management for task categorization
+            - ✅ Comment support on tasks and projects
+            - ✅ Natural language date parsing ("tomorrow at 3pm", "every monday")
+            - ✅ Advanced filter syntax (Todoist filters like "today & p1")
+            - ✅ Priority management (p1-p4)
+            - ✅ Rate limiting protection (450 requests per 15 minutes)
+            - ✅ Cross-platform support (Linux, macOS, Windows)
+            
+            ### Installation
+            
+            1. Download the binary for your platform below
+            2. Make it executable (Linux/macOS): `chmod +x mcp-todoist-*`
+            3. Get your API token from [Todoist Settings > Integrations](https://todoist.com/prefs/integrations)
+            4. Set `TODOIST_API_TOKEN` environment variable
+            5. Run the server or add to Claude Desktop
+            
+            ### Platform Downloads
+            
+            - **Linux (x64)**: `mcp-todoist-linux-amd64`
+            - **Linux (ARM64)**: `mcp-todoist-linux-arm64`
+            - **macOS (Intel)**: `mcp-todoist-macos-amd64`
+            - **macOS (Apple Silicon)**: `mcp-todoist-macos-arm64`
+            - **Windows (x64)**: `mcp-todoist-windows-amd64.exe`
+            
+            ### Checksums
+            
+            SHA256 checksums are provided for each binary (`.sha256` files).
+            
+            ### Quick Start
+            
+            ```bash
+            # Set your API token
+            export TODOIST_API_TOKEN="your_token_here"
+            
+            # Run the server
+            ./mcp-todoist-linux-amd64
+            ```
+            
+            ### Claude Desktop Configuration
+            
+            Add to your `claude_desktop_config.json`:
+            
+            ```json
+            {
+              "mcpServers": {
+                "todoist": {
+                  "command": "/path/to/mcp-todoist",
+                  "env": {
+                    "TODOIST_API_TOKEN": "your_api_token_here"
+                  }
+                }
+              }
+            }
+            ```
+            
+            ### Available Tools (24 total)
+            
+            - **Tasks**: search_tasks, get_task, create_task, update_task, complete_task, uncomplete_task, delete_task
+            - **Projects**: list_projects, create_project, get_project, update_project, delete_project
+            - **Sections**: list_sections, create_section, update_section, delete_section
+            - **Labels**: list_labels, create_label, update_label, delete_label
+            - **Comments**: get_comments, add_comment, update_comment, delete_comment
+            
+            ### Documentation
+            
+            See the [README](https://github.com/roygabriel/mcp-todoist/blob/main/README.md) for:
+            - Detailed setup instructions
+            - How to get your Todoist API token
+            - All 24 tools documented with examples
+            - Natural language date examples
+            - Filter syntax guide
+            - Troubleshooting common issues
+            
+            ### Requirements
+            
+            - Todoist account (free or premium)
+            - API token from https://todoist.com/prefs/integrations
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
