@@ -9,22 +9,19 @@ import (
 	"github.com/rgabriel/mcp-todoist/todoist"
 )
 
-// ListLabelsHandler creates a handler for listing all personal labels
-func ListLabelsHandler(client *todoist.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// ListLabelsHandler creates a handler for listing all personal labels.
+func ListLabelsHandler(client todoist.API) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		// Fetch labels
 		respBody, err := client.Get(ctx, "/labels")
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to list labels: %v", err)), nil
 		}
 
-		// Parse response
 		var labels []map[string]interface{}
 		if err := json.Unmarshal(respBody, &labels); err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to parse labels: %v", err)), nil
 		}
 
-		// Format response
 		response := map[string]interface{}{
 			"count":  len(labels),
 			"labels": labels,
@@ -39,23 +36,20 @@ func ListLabelsHandler(client *todoist.Client) func(context.Context, mcp.CallToo
 	}
 }
 
-// CreateLabelHandler creates a handler for creating a new label
-func CreateLabelHandler(client *todoist.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// CreateLabelHandler creates a handler for creating a new label.
+func CreateLabelHandler(client todoist.API) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 
-		// Extract and validate required parameters
 		name, ok := args["name"].(string)
 		if !ok || name == "" {
 			return mcp.NewToolResultError("name is required"), nil
 		}
 
-		// Build request body
 		body := map[string]interface{}{
 			"name": name,
 		}
 
-		// Add optional parameters
 		if color, ok := args["color"].(string); ok && color != "" {
 			body["color"] = color
 		}
@@ -66,13 +60,11 @@ func CreateLabelHandler(client *todoist.Client) func(context.Context, mcp.CallTo
 			body["is_favorite"] = isFavorite
 		}
 
-		// Create label
 		respBody, err := client.Post(ctx, "/labels", body)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to create label: %v", err)), nil
 		}
 
-		// Parse response
 		var label map[string]interface{}
 		if err := json.Unmarshal(respBody, &label); err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to parse response: %v", err)), nil
@@ -87,21 +79,21 @@ func CreateLabelHandler(client *todoist.Client) func(context.Context, mcp.CallTo
 	}
 }
 
-// UpdateLabelHandler creates a handler for updating a label
-func UpdateLabelHandler(client *todoist.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// UpdateLabelHandler creates a handler for updating a label.
+func UpdateLabelHandler(client todoist.API) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 
-		// Extract and validate required parameters
 		labelID, ok := args["label_id"].(string)
 		if !ok || labelID == "" {
 			return mcp.NewToolResultError("label_id is required"), nil
 		}
+		if err := ValidateID(labelID, "label_id"); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
-		// Build request body
 		body := map[string]interface{}{}
 
-		// Add optional parameters
 		if name, ok := args["name"].(string); ok && name != "" {
 			body["name"] = name
 		}
@@ -119,14 +111,12 @@ func UpdateLabelHandler(client *todoist.Client) func(context.Context, mcp.CallTo
 			return mcp.NewToolResultError("at least one field to update must be provided"), nil
 		}
 
-		// Update label
 		path := fmt.Sprintf("/labels/%s", labelID)
 		respBody, err := client.Post(ctx, path, body)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to update label: %v", err)), nil
 		}
 
-		// Parse response
 		var label map[string]interface{}
 		if err := json.Unmarshal(respBody, &label); err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to parse response: %v", err)), nil
@@ -141,8 +131,8 @@ func UpdateLabelHandler(client *todoist.Client) func(context.Context, mcp.CallTo
 	}
 }
 
-// DeleteLabelHandler creates a handler for deleting a label
-func DeleteLabelHandler(client *todoist.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// DeleteLabelHandler creates a handler for deleting a label.
+func DeleteLabelHandler(client todoist.API) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 
@@ -150,15 +140,16 @@ func DeleteLabelHandler(client *todoist.Client) func(context.Context, mcp.CallTo
 		if !ok || labelID == "" {
 			return mcp.NewToolResultError("label_id is required"), nil
 		}
+		if err := ValidateID(labelID, "label_id"); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
-		// Delete label
 		path := fmt.Sprintf("/labels/%s", labelID)
 		err := client.Delete(ctx, path)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to delete label: %v", err)), nil
 		}
 
-		// Format response
 		response := map[string]interface{}{
 			"success":  true,
 			"label_id": labelID,

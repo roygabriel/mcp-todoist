@@ -13,26 +13,28 @@ import (
 	"github.com/rgabriel/mcp-todoist/todoist"
 )
 
-// SearchTasksHandler creates a handler for searching/listing tasks
-func SearchTasksHandler(client *todoist.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// SearchTasksHandler creates a handler for searching/listing tasks.
+func SearchTasksHandler(client todoist.API) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 
-		// Build query parameters
 		params := url.Values{}
-		
+
 		if filter, ok := args["filter"].(string); ok && filter != "" {
 			params.Set("filter", filter)
 		}
-		
+
 		if projectID, ok := args["project_id"].(string); ok && projectID != "" {
+			if err := ValidateID(projectID, "project_id"); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			params.Set("project_id", projectID)
 		}
-		
+
 		if label, ok := args["label"].(string); ok && label != "" {
 			params.Set("label", label)
 		}
-		
+
 		if ids, ok := args["ids"].([]interface{}); ok && len(ids) > 0 {
 			idStrs := make([]string, 0, len(ids))
 			for _, id := range ids {
@@ -45,25 +47,21 @@ func SearchTasksHandler(client *todoist.Client) func(context.Context, mcp.CallTo
 			}
 		}
 
-		// Build path with query parameters
 		path := "/tasks"
 		if len(params) > 0 {
 			path += "?" + params.Encode()
 		}
 
-		// Fetch tasks
 		respBody, err := client.Get(ctx, path)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to search tasks: %v", err)), nil
 		}
 
-		// Parse response
 		var tasks []map[string]interface{}
 		if err := json.Unmarshal(respBody, &tasks); err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to parse tasks: %v", err)), nil
 		}
 
-		// Format response
 		response := map[string]interface{}{
 			"count": len(tasks),
 			"tasks": tasks,
@@ -78,8 +76,8 @@ func SearchTasksHandler(client *todoist.Client) func(context.Context, mcp.CallTo
 	}
 }
 
-// GetTaskHandler creates a handler for getting a single task
-func GetTaskHandler(client *todoist.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// GetTaskHandler creates a handler for getting a single task.
+func GetTaskHandler(client todoist.API) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 
@@ -87,15 +85,16 @@ func GetTaskHandler(client *todoist.Client) func(context.Context, mcp.CallToolRe
 		if !ok || taskID == "" {
 			return mcp.NewToolResultError("task_id is required"), nil
 		}
+		if err := ValidateID(taskID, "task_id"); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
-		// Fetch task
 		path := fmt.Sprintf("/tasks/%s", taskID)
 		respBody, err := client.Get(ctx, path)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to get task: %v", err)), nil
 		}
 
-		// Parse and format response
 		var task map[string]interface{}
 		if err := json.Unmarshal(respBody, &task); err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to parse task: %v", err)), nil
@@ -110,23 +109,20 @@ func GetTaskHandler(client *todoist.Client) func(context.Context, mcp.CallToolRe
 	}
 }
 
-// CreateTaskHandler creates a handler for creating a new task
-func CreateTaskHandler(client *todoist.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// CreateTaskHandler creates a handler for creating a new task.
+func CreateTaskHandler(client todoist.API) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 
-		// Extract and validate required parameters
 		content, ok := args["content"].(string)
 		if !ok || content == "" {
 			return mcp.NewToolResultError("content is required"), nil
 		}
 
-		// Build request body
 		body := map[string]interface{}{
 			"content": content,
 		}
 
-		// Add optional parameters
 		if description, ok := args["description"].(string); ok && description != "" {
 			body["description"] = description
 		}
@@ -182,13 +178,11 @@ func CreateTaskHandler(client *todoist.Client) func(context.Context, mcp.CallToo
 			body["deadline_date"] = deadlineDate
 		}
 
-		// Create task
 		respBody, err := client.Post(ctx, "/tasks", body)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to create task: %v", err)), nil
 		}
 
-		// Parse response
 		var task map[string]interface{}
 		if err := json.Unmarshal(respBody, &task); err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to parse response: %v", err)), nil
@@ -203,21 +197,21 @@ func CreateTaskHandler(client *todoist.Client) func(context.Context, mcp.CallToo
 	}
 }
 
-// UpdateTaskHandler creates a handler for updating a task
-func UpdateTaskHandler(client *todoist.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// UpdateTaskHandler creates a handler for updating a task.
+func UpdateTaskHandler(client todoist.API) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 
-		// Extract and validate required parameters
 		taskID, ok := args["task_id"].(string)
 		if !ok || taskID == "" {
 			return mcp.NewToolResultError("task_id is required"), nil
 		}
+		if err := ValidateID(taskID, "task_id"); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
-		// Build request body
 		body := map[string]interface{}{}
 
-		// Add optional parameters
 		if content, ok := args["content"].(string); ok && content != "" {
 			body["content"] = content
 		}
@@ -268,14 +262,12 @@ func UpdateTaskHandler(client *todoist.Client) func(context.Context, mcp.CallToo
 			return mcp.NewToolResultError("at least one field to update must be provided"), nil
 		}
 
-		// Update task
 		path := fmt.Sprintf("/tasks/%s", taskID)
 		respBody, err := client.Post(ctx, path, body)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to update task: %v", err)), nil
 		}
 
-		// Parse response
 		var task map[string]interface{}
 		if err := json.Unmarshal(respBody, &task); err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to parse response: %v", err)), nil
@@ -290,8 +282,8 @@ func UpdateTaskHandler(client *todoist.Client) func(context.Context, mcp.CallToo
 	}
 }
 
-// CompleteTaskHandler creates a handler for completing a task
-func CompleteTaskHandler(client *todoist.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// CompleteTaskHandler creates a handler for completing a task.
+func CompleteTaskHandler(client todoist.API) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 
@@ -299,15 +291,16 @@ func CompleteTaskHandler(client *todoist.Client) func(context.Context, mcp.CallT
 		if !ok || taskID == "" {
 			return mcp.NewToolResultError("task_id is required"), nil
 		}
+		if err := ValidateID(taskID, "task_id"); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
-		// Complete task
 		path := fmt.Sprintf("/tasks/%s/close", taskID)
 		_, err := client.Post(ctx, path, nil)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to complete task: %v", err)), nil
 		}
 
-		// Format response
 		response := map[string]interface{}{
 			"success": true,
 			"task_id": taskID,
@@ -323,8 +316,8 @@ func CompleteTaskHandler(client *todoist.Client) func(context.Context, mcp.CallT
 	}
 }
 
-// UncompleteTaskHandler creates a handler for reopening a task
-func UncompleteTaskHandler(client *todoist.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// UncompleteTaskHandler creates a handler for reopening a task.
+func UncompleteTaskHandler(client todoist.API) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 
@@ -332,15 +325,16 @@ func UncompleteTaskHandler(client *todoist.Client) func(context.Context, mcp.Cal
 		if !ok || taskID == "" {
 			return mcp.NewToolResultError("task_id is required"), nil
 		}
+		if err := ValidateID(taskID, "task_id"); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
-		// Reopen task
 		path := fmt.Sprintf("/tasks/%s/reopen", taskID)
 		_, err := client.Post(ctx, path, nil)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to reopen task: %v", err)), nil
 		}
 
-		// Format response
 		response := map[string]interface{}{
 			"success": true,
 			"task_id": taskID,
@@ -356,8 +350,8 @@ func UncompleteTaskHandler(client *todoist.Client) func(context.Context, mcp.Cal
 	}
 }
 
-// DeleteTaskHandler creates a handler for deleting a task
-func DeleteTaskHandler(client *todoist.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// DeleteTaskHandler creates a handler for deleting a task.
+func DeleteTaskHandler(client todoist.API) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 
@@ -365,15 +359,16 @@ func DeleteTaskHandler(client *todoist.Client) func(context.Context, mcp.CallToo
 		if !ok || taskID == "" {
 			return mcp.NewToolResultError("task_id is required"), nil
 		}
+		if err := ValidateID(taskID, "task_id"); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
-		// Delete task
 		path := fmt.Sprintf("/tasks/%s", taskID)
 		err := client.Delete(ctx, path)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to delete task: %v", err)), nil
 		}
 
-		// Format response
 		response := map[string]interface{}{
 			"success": true,
 			"task_id": taskID,
@@ -389,12 +384,11 @@ func DeleteTaskHandler(client *todoist.Client) func(context.Context, mcp.CallToo
 	}
 }
 
-// QuickAddTaskHandler creates a handler for quick adding tasks with Todoist syntax
-func QuickAddTaskHandler(client *todoist.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// QuickAddTaskHandler creates a handler for quick adding tasks with Todoist syntax.
+func QuickAddTaskHandler(client todoist.API) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 
-		// Extract raw content
 		content, ok := args["content"].(string)
 		if !ok || content == "" {
 			return mcp.NewToolResultError("content is required"), nil
@@ -406,8 +400,7 @@ func QuickAddTaskHandler(client *todoist.Client) func(context.Context, mcp.CallT
 		projectMatches := projectRegex.FindAllStringSubmatch(content, -1)
 		if len(projectMatches) > 0 {
 			projectName := projectMatches[0][1]
-			
-			// Fetch projects to resolve name to ID
+
 			respBody, err := client.Get(ctx, "/projects")
 			if err == nil {
 				var projects []map[string]interface{}
@@ -424,7 +417,6 @@ func QuickAddTaskHandler(client *todoist.Client) func(context.Context, mcp.CallT
 					}
 				}
 			}
-			// Remove project tag from content
 			content = projectRegex.ReplaceAllString(content, "")
 		}
 
@@ -435,7 +427,6 @@ func QuickAddTaskHandler(client *todoist.Client) func(context.Context, mcp.CallT
 		for _, match := range labelMatches {
 			labels = append(labels, match[1])
 		}
-		// Remove label tags from content
 		content = labelRegex.ReplaceAllString(content, "")
 
 		// Parse priority (p1-p4)
@@ -443,7 +434,6 @@ func QuickAddTaskHandler(client *todoist.Client) func(context.Context, mcp.CallT
 		priorityRegex := regexp.MustCompile(`\bp([1-4])\b`)
 		priorityMatches := priorityRegex.FindStringSubmatch(content)
 		if len(priorityMatches) > 0 {
-			// Map p1-p4 to 4-1 (p1=urgent=4, p4=normal=1)
 			switch priorityMatches[1] {
 			case "1":
 				priority = 4
@@ -454,18 +444,15 @@ func QuickAddTaskHandler(client *todoist.Client) func(context.Context, mcp.CallT
 			case "4":
 				priority = 1
 			}
-			// Remove priority tag from content
 			content = priorityRegex.ReplaceAllString(content, "")
 		}
 
-		// Clean up content (trim extra whitespace)
 		content = strings.TrimSpace(regexp.MustCompile(`\s+`).ReplaceAllString(content, " "))
 
-		// Extract potential due date from remaining content
-		// Look for common date patterns at the end of the string
+		// Extract potential due date keywords
 		var dueString string
 		dateKeywords := []string{"tomorrow", "today", "tonight", "next week", "next month", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"}
-		
+
 		words := strings.Fields(content)
 		dateStartIdx := -1
 		for i := len(words) - 1; i >= 0; i-- {
@@ -486,7 +473,6 @@ func QuickAddTaskHandler(client *todoist.Client) func(context.Context, mcp.CallT
 			content = strings.TrimSpace(strings.Join(words[:dateStartIdx], " "))
 		}
 
-		// Build request body
 		body := map[string]interface{}{
 			"content": content,
 		}
@@ -504,13 +490,11 @@ func QuickAddTaskHandler(client *todoist.Client) func(context.Context, mcp.CallT
 			body["due_string"] = dueString
 		}
 
-		// Create task
 		respBody, err := client.Post(ctx, "/tasks", body)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to create task: %v", err)), nil
 		}
 
-		// Parse response
 		var task map[string]interface{}
 		if err := json.Unmarshal(respBody, &task); err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to parse response: %v", err)), nil
@@ -525,10 +509,9 @@ func QuickAddTaskHandler(client *todoist.Client) func(context.Context, mcp.CallT
 	}
 }
 
-// GetTaskStatsHandler creates a handler for getting task statistics
-func GetTaskStatsHandler(client *todoist.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// GetTaskStatsHandler creates a handler for getting task statistics.
+func GetTaskStatsHandler(client todoist.API) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		// Fetch all active tasks
 		tasksBody, err := client.Get(ctx, "/tasks")
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to fetch tasks: %v", err)), nil
@@ -539,7 +522,6 @@ func GetTaskStatsHandler(client *todoist.Client) func(context.Context, mcp.CallT
 			return mcp.NewToolResultError(fmt.Sprintf("failed to parse tasks: %v", err)), nil
 		}
 
-		// Fetch all projects for name mapping
 		projectsBody, err := client.Get(ctx, "/projects")
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to fetch projects: %v", err)), nil
@@ -550,7 +532,6 @@ func GetTaskStatsHandler(client *todoist.Client) func(context.Context, mcp.CallT
 			return mcp.NewToolResultError(fmt.Sprintf("failed to parse projects: %v", err)), nil
 		}
 
-		// Create project ID to name mapping
 		projectMap := make(map[string]string)
 		for _, proj := range projects {
 			if id, ok := proj["id"].(string); ok {
@@ -560,7 +541,6 @@ func GetTaskStatsHandler(client *todoist.Client) func(context.Context, mcp.CallT
 			}
 		}
 
-		// Initialize statistics
 		stats := map[string]interface{}{
 			"total_active": len(tasks),
 			"today":        0,
@@ -575,10 +555,8 @@ func GetTaskStatsHandler(client *todoist.Client) func(context.Context, mcp.CallT
 		}
 
 		today := time.Now().Format("2006-01-02")
-		
-		// Count statistics
+
 		for _, task := range tasks {
-			// Count by priority
 			if priority, ok := task["priority"].(float64); ok {
 				p := int(priority)
 				switch p {
@@ -593,7 +571,6 @@ func GetTaskStatsHandler(client *todoist.Client) func(context.Context, mcp.CallT
 				}
 			}
 
-			// Count by project
 			if projectID, ok := task["project_id"].(string); ok {
 				projectName := projectMap[projectID]
 				if projectName == "" {
@@ -602,7 +579,6 @@ func GetTaskStatsHandler(client *todoist.Client) func(context.Context, mcp.CallT
 				stats["by_project"].(map[string]int)[projectName]++
 			}
 
-			// Count today and overdue
 			if due, ok := task["due"].(map[string]interface{}); ok {
 				if dueDate, ok := due["date"].(string); ok {
 					if dueDate == today {
@@ -623,14 +599,13 @@ func GetTaskStatsHandler(client *todoist.Client) func(context.Context, mcp.CallT
 	}
 }
 
-// BulkCompleteTasksHandler creates a handler for completing multiple tasks
-func BulkCompleteTasksHandler(client *todoist.Client, syncClient *todoist.SyncClient) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// BulkCompleteTasksHandler creates a handler for completing multiple tasks.
+func BulkCompleteTasksHandler(client todoist.API, syncClient todoist.SyncAPI) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 
 		var taskIDs []string
 
-		// Get task IDs from filter if provided
 		if filter, ok := args["filter"].(string); ok && filter != "" {
 			params := url.Values{}
 			params.Set("filter", filter)
@@ -653,7 +628,6 @@ func BulkCompleteTasksHandler(client *todoist.Client, syncClient *todoist.SyncCl
 			}
 		}
 
-		// Get task IDs from array if provided (takes precedence if both provided)
 		if taskIDsParam, ok := args["task_ids"].([]interface{}); ok && len(taskIDsParam) > 0 {
 			taskIDs = make([]string, 0, len(taskIDsParam))
 			for _, id := range taskIDsParam {
@@ -671,11 +645,9 @@ func BulkCompleteTasksHandler(client *todoist.Client, syncClient *todoist.SyncCl
 		var failedTasks []string
 		var usedBatching bool
 
-		// Use Sync API batching for larger operations (>5 tasks)
 		if len(taskIDs) > 5 {
 			usedBatching = true
-			
-			// Build commands for Sync API
+
 			commands := make([]todoist.Command, len(taskIDs))
 			for i, taskID := range taskIDs {
 				commands[i] = todoist.Command{
@@ -687,13 +659,11 @@ func BulkCompleteTasksHandler(client *todoist.Client, syncClient *todoist.SyncCl
 				}
 			}
 
-			// Execute batch request
 			syncResp, err := syncClient.BatchCommands(ctx, commands)
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("failed to batch complete tasks: %v", err)), nil
 			}
 
-			// Parse sync_status for success/failures
 			for i, cmd := range commands {
 				status := syncResp.SyncStatus[cmd.UUID]
 				if statusStr, ok := status.(string); ok && statusStr == "ok" {
@@ -703,16 +673,13 @@ func BulkCompleteTasksHandler(client *todoist.Client, syncClient *todoist.SyncCl
 				}
 			}
 		} else {
-			// Use REST API for small batches (<=5 tasks)
 			usedBatching = false
-			
-			// Check rate limit capacity
+
 			remaining := client.GetRemainingRequests()
 			if remaining < len(taskIDs) {
 				return mcp.NewToolResultError(fmt.Sprintf("insufficient rate limit capacity: need %d requests, have %d remaining in 15min window", len(taskIDs), remaining)), nil
 			}
 
-			// Complete tasks sequentially
 			for _, taskID := range taskIDs {
 				path := fmt.Sprintf("/tasks/%s/close", taskID)
 				_, err := client.Post(ctx, path, nil)
@@ -724,7 +691,6 @@ func BulkCompleteTasksHandler(client *todoist.Client, syncClient *todoist.SyncCl
 			}
 		}
 
-		// Build response
 		response := map[string]interface{}{
 			"total_tasks":     len(taskIDs),
 			"completed":       successCount,
@@ -748,18 +714,16 @@ func BulkCompleteTasksHandler(client *todoist.Client, syncClient *todoist.SyncCl
 	}
 }
 
-// BatchCreateTasksHandler creates a handler for creating multiple tasks in one batch
-func BatchCreateTasksHandler(syncClient *todoist.SyncClient) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// BatchCreateTasksHandler creates a handler for creating multiple tasks in one batch.
+func BatchCreateTasksHandler(syncClient todoist.SyncAPI) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 
-		// Extract tasks array
 		tasksParam, ok := args["tasks"].([]interface{})
 		if !ok || len(tasksParam) == 0 {
 			return mcp.NewToolResultError("tasks array is required and must contain at least one task"), nil
 		}
 
-		// Build commands for Sync API
 		commands := make([]todoist.Command, 0, len(tasksParam))
 		tempIDs := make([]string, len(tasksParam))
 
@@ -769,22 +733,18 @@ func BatchCreateTasksHandler(syncClient *todoist.SyncClient) func(context.Contex
 				return mcp.NewToolResultError(fmt.Sprintf("task at index %d is not a valid object", i)), nil
 			}
 
-			// Validate required content field
 			content, ok := taskMap["content"].(string)
 			if !ok || content == "" {
 				return mcp.NewToolResultError(fmt.Sprintf("task at index %d missing required 'content' field", i)), nil
 			}
 
-			// Generate temp ID for this task
 			tempID := todoist.GenerateTempID()
 			tempIDs[i] = tempID
 
-			// Build command args
 			cmdArgs := map[string]interface{}{
 				"content": content,
 			}
 
-			// Add optional fields
 			if description, ok := taskMap["description"].(string); ok && description != "" {
 				cmdArgs["description"] = description
 			}
@@ -818,25 +778,19 @@ func BatchCreateTasksHandler(syncClient *todoist.SyncClient) func(context.Contex
 				cmdArgs["due_date"] = dueDate
 			}
 
-			// Handle parent_temp_id - reference to another task in same batch
 			if parentTempIDRef, ok := taskMap["parent_temp_id"].(string); ok && parentTempIDRef != "" {
-				// Parse as index or direct temp_id
 				var parentIdx int
 				if _, err := fmt.Sscanf(parentTempIDRef, "%d", &parentIdx); err == nil {
-					// It's an index
 					if parentIdx >= 0 && parentIdx < len(tempIDs) && parentIdx < i {
 						cmdArgs["parent_id"] = tempIDs[parentIdx]
 					}
 				} else {
-					// It's a direct temp_id reference
 					cmdArgs["parent_id"] = parentTempIDRef
 				}
 			} else if parentID, ok := taskMap["parent_id"].(string); ok && parentID != "" {
-				// Direct parent_id (existing task)
 				cmdArgs["parent_id"] = parentID
 			}
 
-			// Create command
 			commands = append(commands, todoist.Command{
 				Type:   "item_add",
 				UUID:   todoist.GenerateUUID(),
@@ -845,37 +799,31 @@ func BatchCreateTasksHandler(syncClient *todoist.SyncClient) func(context.Contex
 			})
 		}
 
-		// Execute batch request
 		syncResp, err := syncClient.BatchCommands(ctx, commands)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to batch create tasks: %v", err)), nil
 		}
 
-		// Parse results
 		createdTasks := make([]map[string]interface{}, 0)
 		failedIndices := make([]int, 0)
 
 		for i, cmd := range commands {
 			status := syncResp.SyncStatus[cmd.UUID]
 			if statusStr, ok := status.(string); ok && statusStr == "ok" {
-				// Task created successfully
 				taskInfo := map[string]interface{}{
 					"index":   i,
 					"temp_id": cmd.TempID,
 				}
-				// Get real ID from mapping
 				if realID, ok := syncResp.TempIDMapping[cmd.TempID]; ok {
 					taskInfo["id"] = realID
 				}
 				taskInfo["content"] = cmd.Args["content"]
 				createdTasks = append(createdTasks, taskInfo)
 			} else {
-				// Task creation failed
 				failedIndices = append(failedIndices, i)
 			}
 		}
 
-		// Build response
 		response := map[string]interface{}{
 			"total_tasks":     len(commands),
 			"created":         len(createdTasks),
@@ -900,22 +848,22 @@ func BatchCreateTasksHandler(syncClient *todoist.SyncClient) func(context.Contex
 	}
 }
 
-// MoveTasksHandler creates a handler for moving multiple tasks to a different project
-func MoveTasksHandler(client *todoist.Client, syncClient *todoist.SyncClient) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// MoveTasksHandler creates a handler for moving multiple tasks to a different project.
+func MoveTasksHandler(client todoist.API, syncClient todoist.SyncAPI) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 
-		// Validate to_project_id (required)
 		toProjectID, ok := args["to_project_id"].(string)
 		if !ok || toProjectID == "" {
 			return mcp.NewToolResultError("to_project_id is required"), nil
 		}
+		if err := ValidateID(toProjectID, "to_project_id"); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		var taskIDs []string
 
-		// Get task IDs from filter if provided
 		if filter, ok := args["filter"].(string); ok && filter != "" {
-			// Use existing search logic to get task IDs from filter
 			params := url.Values{}
 			params.Set("filter", filter)
 			path := "/tasks?" + params.Encode()
@@ -937,7 +885,6 @@ func MoveTasksHandler(client *todoist.Client, syncClient *todoist.SyncClient) fu
 			}
 		}
 
-		// Get task IDs from array if provided (takes precedence if both provided)
 		if taskIDsParam, ok := args["task_ids"].([]interface{}); ok && len(taskIDsParam) > 0 {
 			taskIDs = make([]string, 0, len(taskIDsParam))
 			for _, id := range taskIDsParam {
@@ -951,7 +898,6 @@ func MoveTasksHandler(client *todoist.Client, syncClient *todoist.SyncClient) fu
 			return mcp.NewToolResultError("either task_ids or filter must be provided and match at least one task"), nil
 		}
 
-		// Fetch destination project name for response
 		projectPath := fmt.Sprintf("/projects/%s", toProjectID)
 		projectResp, err := client.Get(ctx, projectPath)
 		var toProjectName string
@@ -971,11 +917,9 @@ func MoveTasksHandler(client *todoist.Client, syncClient *todoist.SyncClient) fu
 		var failedTasks []string
 		var usedBatching bool
 
-		// Use Sync API batching for larger operations (>5 tasks)
 		if len(taskIDs) > 5 {
 			usedBatching = true
-			
-			// Build commands for Sync API (item_update with project_id)
+
 			commands := make([]todoist.Command, len(taskIDs))
 			for i, taskID := range taskIDs {
 				commands[i] = todoist.Command{
@@ -988,13 +932,11 @@ func MoveTasksHandler(client *todoist.Client, syncClient *todoist.SyncClient) fu
 				}
 			}
 
-			// Execute batch request
 			syncResp, err := syncClient.BatchCommands(ctx, commands)
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("failed to batch move tasks: %v", err)), nil
 			}
 
-			// Parse sync_status for success/failures
 			for i, cmd := range commands {
 				status := syncResp.SyncStatus[cmd.UUID]
 				if statusStr, ok := status.(string); ok && statusStr == "ok" {
@@ -1004,16 +946,13 @@ func MoveTasksHandler(client *todoist.Client, syncClient *todoist.SyncClient) fu
 				}
 			}
 		} else {
-			// Use REST API for small batches (<=5 tasks)
 			usedBatching = false
-			
-			// Check rate limit capacity
+
 			remaining := client.GetRemainingRequests()
 			if remaining < len(taskIDs) {
 				return mcp.NewToolResultError(fmt.Sprintf("insufficient rate limit capacity: need %d requests, have %d remaining in 15min window", len(taskIDs), remaining)), nil
 			}
 
-			// Move tasks sequentially via REST API update
 			for _, taskID := range taskIDs {
 				path := fmt.Sprintf("/tasks/%s", taskID)
 				body := map[string]interface{}{
@@ -1028,7 +967,6 @@ func MoveTasksHandler(client *todoist.Client, syncClient *todoist.SyncClient) fu
 			}
 		}
 
-		// Build response
 		response := map[string]interface{}{
 			"total_tasks":     len(taskIDs),
 			"moved":           successCount,
@@ -1052,4 +990,3 @@ func MoveTasksHandler(client *todoist.Client, syncClient *todoist.SyncClient) fu
 		return mcp.NewToolResultText(string(jsonData)), nil
 	}
 }
-
