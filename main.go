@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"os"
@@ -31,15 +33,48 @@ func setupLogger() {
 	slog.SetDefault(slog.New(handler))
 }
 
-// timeoutMiddleware wraps every tool handler with a context deadline.
-func timeoutMiddleware(d time.Duration) server.ToolHandlerMiddleware {
+// toolMiddleware wraps every tool handler with a context deadline and structured
+// logging (tool name, duration, request ID, and success/error status).
+func toolMiddleware(d time.Duration) server.ToolHandlerMiddleware {
 	return func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
 		return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			requestID := generateRequestID()
+			start := time.Now()
+
+			slog.Debug("tool call started",
+				"request_id", requestID,
+				"tool", req.Params.Name,
+			)
+
 			ctx, cancel := context.WithTimeout(ctx, d)
 			defer cancel()
-			return next(ctx, req)
+
+			result, err := next(ctx, req)
+			duration := time.Since(start)
+
+			attrs := []any{
+				"request_id", requestID,
+				"tool", req.Params.Name,
+				"duration_ms", duration.Milliseconds(),
+			}
+
+			if err != nil {
+				slog.Error("tool call failed", append(attrs, "error", err)...)
+			} else if result != nil && result.IsError {
+				slog.Warn("tool call returned error", attrs...)
+			} else {
+				slog.Info("tool call completed", attrs...)
+			}
+
+			return result, err
 		}
 	}
+}
+
+func generateRequestID() string {
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 func main() {
@@ -67,7 +102,7 @@ func main() {
 		version,
 		server.WithToolCapabilities(false),
 		server.WithRecovery(),
-		server.WithToolHandlerMiddleware(timeoutMiddleware(30*time.Second)),
+		server.WithToolHandlerMiddleware(toolMiddleware(30*time.Second)),
 	)
 
 	// ── Task tools ──────────────────────────────────────────────────────

@@ -58,7 +58,18 @@ func NewSyncClient(apiToken string, rl *RateLimiter) *SyncClient {
 }
 
 // BatchCommands sends multiple commands in a single Sync API request.
+// Retried automatically on transient failures because command UUIDs provide idempotency.
 func (sc *SyncClient) BatchCommands(ctx context.Context, commands []Command) (*SyncResponse, error) {
+	var result *SyncResponse
+	err := retryWithBackoff(ctx, maxAttempts, func() error {
+		var reqErr error
+		result, reqErr = sc.doBatchRequest(ctx, commands)
+		return reqErr
+	})
+	return result, err
+}
+
+func (sc *SyncClient) doBatchRequest(ctx context.Context, commands []Command) (*SyncResponse, error) {
 	if err := sc.rateLimiter.Check(); err != nil {
 		return nil, err
 	}
@@ -81,13 +92,13 @@ func (sc *SyncClient) BatchCommands(ctx context.Context, commands []Command) (*S
 
 	resp, err := sc.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return nil, &RetryableError{err: fmt.Errorf("request failed: %w", err)}
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, &RetryableError{err: fmt.Errorf("failed to read response: %w", err)}
 	}
 
 	if resp.StatusCode >= 400 {

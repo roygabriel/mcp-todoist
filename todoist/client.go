@@ -68,13 +68,13 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return nil, &RetryableError{err: fmt.Errorf("request failed: %w", err)}
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, &RetryableError{err: fmt.Errorf("failed to read response: %w", err)}
 	}
 
 	if resp.StatusCode >= 400 {
@@ -84,20 +84,28 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 	return respBody, nil
 }
 
-// Get performs a GET request.
+// Get performs a GET request with automatic retry on transient failures.
 func (c *Client) Get(ctx context.Context, path string) ([]byte, error) {
-	return c.doRequest(ctx, http.MethodGet, path, nil)
+	var result []byte
+	err := retryWithBackoff(ctx, maxAttempts, func() error {
+		var reqErr error
+		result, reqErr = c.doRequest(ctx, http.MethodGet, path, nil)
+		return reqErr
+	})
+	return result, err
 }
 
-// Post performs a POST request.
+// Post performs a POST request. Not retried automatically because creates are not idempotent.
 func (c *Client) Post(ctx context.Context, path string, body interface{}) ([]byte, error) {
 	return c.doRequest(ctx, http.MethodPost, path, body)
 }
 
-// Delete performs a DELETE request.
+// Delete performs a DELETE request with automatic retry on transient failures.
 func (c *Client) Delete(ctx context.Context, path string) error {
-	_, err := c.doRequest(ctx, http.MethodDelete, path, nil)
-	return err
+	return retryWithBackoff(ctx, maxAttempts, func() error {
+		_, err := c.doRequest(ctx, http.MethodDelete, path, nil)
+		return err
+	})
 }
 
 // TestConnection tests the API connection by fetching projects.
@@ -126,7 +134,7 @@ func handleHTTPError(statusCode int, body []byte) error {
 	case 429:
 		return fmt.Errorf("rate limit exceeded: too many requests (max 450 per 15 minutes). Please wait and try again")
 	case 500, 502, 503, 504:
-		return fmt.Errorf("Todoist server error (status %d): please try again later", statusCode)
+		return &RetryableError{err: fmt.Errorf("Todoist server error (status %d): please try again later", statusCode)}
 	default:
 		if len(body) > 0 {
 			return fmt.Errorf("API error (status %d): %s", statusCode, string(body))
