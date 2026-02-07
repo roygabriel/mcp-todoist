@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"unicode"
 
@@ -27,7 +28,7 @@ func Load() (*Config, error) {
 
 	// Support loading token from a file (useful for Kubernetes secrets / Docker secrets)
 	if strings.HasPrefix(apiToken, "file://") {
-		path := strings.TrimPrefix(apiToken, "file://")
+		path := filepath.Clean(strings.TrimPrefix(apiToken, "file://"))
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read API token from file %s: %w", path, err)

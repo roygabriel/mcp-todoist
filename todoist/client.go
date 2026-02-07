@@ -70,7 +70,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 	if err != nil {
 		return nil, &RetryableError{err: fmt.Errorf("request failed: %w", err)}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -134,7 +134,7 @@ func handleHTTPError(statusCode int, body []byte) error {
 	case 429:
 		return fmt.Errorf("rate limit exceeded: too many requests (max 450 per 15 minutes). Please wait and try again")
 	case 500, 502, 503, 504:
-		return &RetryableError{err: fmt.Errorf("Todoist server error (status %d): please try again later", statusCode)}
+		return &RetryableError{err: fmt.Errorf("server error (status %d): please try again later", statusCode)}
 	default:
 		if len(body) > 0 {
 			return fmt.Errorf("API error (status %d): %s", statusCode, string(body))

@@ -91,10 +91,8 @@ func TestValidateID(t *testing.T) {
 				if err.Error() != tt.errMsg {
 					t.Errorf("error = %q, want %q", err.Error(), tt.errMsg)
 				}
-			} else {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("unexpected error: %v", err)
 			}
 		})
 	}

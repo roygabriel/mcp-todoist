@@ -34,7 +34,10 @@ func retryWithBackoff(ctx context.Context, attempts int, fn func() error) error 
 			return lastErr
 		}
 		if i < attempts-1 {
-			delay := baseDelay << uint(i)
+			delay := baseDelay
+			for range i {
+				delay *= 2
+			}
 			if delay > maxDelay {
 				delay = maxDelay
 			}

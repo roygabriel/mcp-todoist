@@ -77,10 +77,8 @@ func TestValidate(t *testing.T) {
 				if !strings.Contains(err.Error(), tt.errSubstr) {
 					t.Errorf("error = %q, want substring %q", err.Error(), tt.errSubstr)
 				}
-			} else {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("unexpected error: %v", err)
 			}
 		})
 	}

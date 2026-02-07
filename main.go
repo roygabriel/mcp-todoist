@@ -58,11 +58,12 @@ func toolMiddleware(d time.Duration) server.ToolHandlerMiddleware {
 				"duration_ms", duration.Milliseconds(),
 			}
 
-			if err != nil {
+			switch {
+			case err != nil:
 				slog.Error("tool call failed", append(attrs, "error", err)...)
-			} else if result != nil && result.IsError {
+			case result != nil && result.IsError:
 				slog.Warn("tool call returned error", attrs...)
-			} else {
+			default:
 				slog.Info("tool call completed", attrs...)
 			}
 
