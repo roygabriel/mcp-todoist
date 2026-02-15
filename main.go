@@ -103,6 +103,35 @@ func toolMiddleware(d time.Duration) server.ToolHandlerMiddleware {
 	}
 }
 
+// concurrencyMiddleware limits the number of tool handlers running
+// concurrently. It uses a buffered channel as a semaphore and respects
+// context cancellation while waiting for a slot.
+func concurrencyMiddleware(maxConcurrent int) server.ToolHandlerMiddleware {
+	sem := make(chan struct{}, maxConcurrent)
+	return func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
+		return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+				return next(ctx, req)
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+	}
+}
+
+// chainMiddleware composes multiple middlewares into one. The first middleware
+// in the list is outermost (executed first).
+func chainMiddleware(middlewares ...server.ToolHandlerMiddleware) server.ToolHandlerMiddleware {
+	return func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
+		for i := len(middlewares) - 1; i >= 0; i-- {
+			next = middlewares[i](next)
+		}
+		return next
+	}
+}
+
 func generateRequestID() string {
 	b := make([]byte, 4)
 	_, _ = rand.Read(b)
@@ -137,7 +166,10 @@ func main() {
 		version,
 		server.WithToolCapabilities(false),
 		server.WithRecovery(),
-		server.WithToolHandlerMiddleware(toolMiddleware(30*time.Second)),
+		server.WithToolHandlerMiddleware(chainMiddleware(
+			concurrencyMiddleware(10),
+			toolMiddleware(30*time.Second),
+		)),
 	)
 
 	// ── Task tools ──────────────────────────────────────────────────────

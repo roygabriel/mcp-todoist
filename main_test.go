@@ -5,10 +5,12 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 )
 
 func TestToolMiddleware_AuditDestructive(t *testing.T) {
@@ -100,6 +102,125 @@ func TestDestructiveTools_Membership(t *testing.T) {
 	for _, name := range notExpected {
 		if destructiveTools[name] {
 			t.Errorf("%s should not be in destructiveTools", name)
+		}
+	}
+}
+
+func TestConcurrencyMiddleware_LimitsConcurrency(t *testing.T) {
+	const maxConcurrent = 3
+	mw := concurrencyMiddleware(maxConcurrent)
+
+	var running atomic.Int32
+	var peak atomic.Int32
+	barrier := make(chan struct{})
+
+	handler := mw(func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		cur := running.Add(1)
+		// Track peak concurrency.
+		for {
+			old := peak.Load()
+			if cur <= old || peak.CompareAndSwap(old, cur) {
+				break
+			}
+		}
+		<-barrier
+		running.Add(-1)
+		return &mcp.CallToolResult{}, nil
+	})
+
+	// Launch maxConcurrent+2 requests.
+	done := make(chan struct{}, maxConcurrent+2)
+	for i := 0; i < maxConcurrent+2; i++ {
+		go func() {
+			_, _ = handler(context.Background(), mcp.CallToolRequest{})
+			done <- struct{}{}
+		}()
+	}
+
+	// Wait for the semaphore slots to fill.
+	time.Sleep(50 * time.Millisecond)
+
+	if r := running.Load(); r > int32(maxConcurrent) {
+		t.Errorf("expected at most %d concurrent, got %d", maxConcurrent, r)
+	}
+
+	// Release all.
+	close(barrier)
+	for i := 0; i < maxConcurrent+2; i++ {
+		<-done
+	}
+
+	if p := peak.Load(); p > int32(maxConcurrent) {
+		t.Errorf("peak concurrency %d exceeded limit %d", p, maxConcurrent)
+	}
+}
+
+func TestConcurrencyMiddleware_RespectsContextCancellation(t *testing.T) {
+	mw := concurrencyMiddleware(1)
+
+	// Fill the single slot.
+	blocking := make(chan struct{})
+	go func() {
+		handler := mw(func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			<-blocking
+			return &mcp.CallToolResult{}, nil
+		})
+		_, _ = handler(context.Background(), mcp.CallToolRequest{})
+	}()
+	time.Sleep(20 * time.Millisecond) // let the goroutine acquire the slot
+
+	// Second request with a cancelled context should fail.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	handler := mw(func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		t.Fatal("handler should not be called")
+		return nil, nil
+	})
+
+	_, err := handler(ctx, mcp.CallToolRequest{})
+	if err == nil {
+		t.Fatal("expected error from cancelled context")
+	}
+	close(blocking)
+}
+
+func TestChainMiddleware_Order(t *testing.T) {
+	var order []string
+
+	mw1 := func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
+		return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			order = append(order, "mw1-before")
+			r, e := next(ctx, req)
+			order = append(order, "mw1-after")
+			return r, e
+		}
+	}
+
+	mw2 := func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
+		return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			order = append(order, "mw2-before")
+			r, e := next(ctx, req)
+			order = append(order, "mw2-after")
+			return r, e
+		}
+	}
+
+	chained := chainMiddleware(mw1, mw2)
+	handler := chained(func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		order = append(order, "handler")
+		return &mcp.CallToolResult{}, nil
+	})
+
+	_, _ = handler(context.Background(), mcp.CallToolRequest{})
+
+	expected := []string{"mw1-before", "mw2-before", "handler", "mw2-after", "mw1-after"}
+	if len(order) != len(expected) {
+		t.Fatalf("expected %d entries, got %d: %v", len(expected), len(order), order)
+	}
+	for i, v := range expected {
+		if order[i] != v {
+			t.Errorf("position %d: expected %q, got %q", i, v, order[i])
 		}
 	}
 }
