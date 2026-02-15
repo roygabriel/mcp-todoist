@@ -146,6 +146,32 @@ Edit `~/.config/claude/claude_desktop_config.json`:
 
 After adding the configuration, restart Claude Desktop.
 
+## Usage with Claude Code CLI
+
+Add the server using the `claude mcp add` command:
+
+```bash
+claude mcp add todoist -- /path/to/mcp-todoist
+```
+
+Set the API token as an environment variable before launching Claude Code, or export it in your shell profile:
+
+```bash
+export TODOIST_API_TOKEN="your_api_token_here"
+```
+
+Alternatively, add it with an explicit environment variable using a wrapper script:
+
+```bash
+claude mcp add todoist -- env TODOIST_API_TOKEN=your_api_token_here /path/to/mcp-todoist
+```
+
+To verify the server is registered:
+
+```bash
+claude mcp list
+```
+
 ## Available Tools
 
 ### Task Management
