@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -222,5 +223,65 @@ func TestChainMiddleware_Order(t *testing.T) {
 		if order[i] != v {
 			t.Errorf("position %d: expected %q, got %q", i, v, order[i])
 		}
+	}
+}
+
+func TestLogLevel(t *testing.T) {
+	tests := []struct {
+		env  string
+		want slog.Level
+	}{
+		{"DEBUG", slog.LevelDebug},
+		{"WARN", slog.LevelWarn},
+		{"ERROR", slog.LevelError},
+		{"INFO", slog.LevelInfo},
+		{"", slog.LevelInfo},
+		{"debug", slog.LevelDebug},
+		{"unknown", slog.LevelInfo},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.env, func(t *testing.T) {
+			os.Setenv("LOG_LEVEL", tt.env)
+			defer os.Unsetenv("LOG_LEVEL")
+			if got := logLevel(); got != tt.want {
+				t.Errorf("logLevel(%q) = %v, want %v", tt.env, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSetupLogger(t *testing.T) {
+	opts := setupLogger()
+	if opts == nil {
+		t.Fatal("expected non-nil options")
+	}
+}
+
+func TestInstallRedaction(t *testing.T) {
+	opts := &slog.HandlerOptions{Level: slog.LevelDebug}
+	installRedaction(opts, []string{"my-secret"})
+
+	var buf bytes.Buffer
+	handler := newRedactingHandler(
+		slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}),
+		[]string{"my-secret"},
+	)
+	slog.SetDefault(slog.New(handler))
+
+	slog.Info("token is my-secret")
+	if strings.Contains(buf.String(), "my-secret") {
+		t.Error("secret was not redacted")
+	}
+}
+
+func TestGenerateRequestID(t *testing.T) {
+	id := generateRequestID()
+	if len(id) != 8 {
+		t.Errorf("expected 8-char hex string, got %d: %s", len(id), id)
+	}
+	// Should be unique.
+	if generateRequestID() == id {
+		t.Error("two consecutive IDs should not be equal")
 	}
 }
