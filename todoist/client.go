@@ -73,7 +73,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(req) // #nosec G704 -- URL built from const baseURL + internal path; no user-controlled input
 	if err != nil {
 		done(false) // connection failure counts as breaker failure
 		return nil, &RetryableError{err: fmt.Errorf("request failed: %w", err)}

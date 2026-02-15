@@ -94,7 +94,7 @@ func (sc *SyncClient) doBatchRequest(ctx context.Context, commands []Command) (*
 	req.Header.Set("Authorization", "Bearer "+sc.apiToken)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := sc.httpClient.Do(req)
+	resp, err := sc.httpClient.Do(req) // #nosec G704 -- URL is const syncBaseURL; no user-controlled input
 	if err != nil {
 		done(false) // connection failure counts as breaker failure
 		return nil, &RetryableError{err: fmt.Errorf("request failed: %w", err)}
