@@ -10,11 +10,15 @@ import (
 type BreakerState int
 
 const (
-	StateClosed   BreakerState = iota // Normal operation
-	StateOpen                         // Failing fast
-	StateHalfOpen                     // Probing with one request
+	// StateClosed indicates normal operation — all requests pass through.
+	StateClosed BreakerState = iota
+	// StateOpen indicates the breaker is rejecting requests (failing fast).
+	StateOpen
+	// StateHalfOpen indicates the breaker is allowing one probe request.
+	StateHalfOpen
 )
 
+// String returns the human-readable name of the breaker state.
 func (s BreakerState) String() string {
 	switch s {
 	case StateClosed:
