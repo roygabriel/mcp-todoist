@@ -19,22 +19,49 @@ import (
 
 var version = "dev"
 
-func setupLogger() {
-	level := slog.LevelInfo
+func logLevel() slog.Level {
 	switch strings.ToUpper(os.Getenv("LOG_LEVEL")) {
 	case "DEBUG":
-		level = slog.LevelDebug
+		return slog.LevelDebug
 	case "WARN":
-		level = slog.LevelWarn
+		return slog.LevelWarn
 	case "ERROR":
-		level = slog.LevelError
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
 	}
-	handler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level})
-	slog.SetDefault(slog.New(handler))
 }
 
-// toolMiddleware wraps every tool handler with a context deadline and structured
-// logging (tool name, duration, request ID, and success/error status).
+func setupLogger() *slog.HandlerOptions {
+	opts := &slog.HandlerOptions{Level: logLevel()}
+	handler := slog.NewJSONHandler(os.Stderr, opts)
+	slog.SetDefault(slog.New(handler))
+	return opts
+}
+
+// installRedaction wraps the global logger with secret redaction. Must be
+// called after config is loaded so the API token is available.
+func installRedaction(opts *slog.HandlerOptions, secrets []string) {
+	base := slog.NewJSONHandler(os.Stderr, opts)
+	slog.SetDefault(slog.New(newRedactingHandler(base, secrets)))
+}
+
+// destructiveTools lists tools that permanently modify or delete data and
+// warrant audit-level logging.
+var destructiveTools = map[string]bool{
+	"delete_task":          true,
+	"delete_project":       true,
+	"delete_section":       true,
+	"delete_label":         true,
+	"delete_comment":       true,
+	"bulk_complete_tasks":  true,
+	"batch_create_tasks":   true,
+	"move_tasks":           true,
+}
+
+// toolMiddleware wraps every tool handler with a context deadline, structured
+// logging (tool name, duration, request ID, success/error status), and audit
+// logging for destructive operations.
 func toolMiddleware(d time.Duration) server.ToolHandlerMiddleware {
 	return func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
 		return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -58,6 +85,10 @@ func toolMiddleware(d time.Duration) server.ToolHandlerMiddleware {
 				"duration_ms", duration.Milliseconds(),
 			}
 
+			if destructiveTools[req.Params.Name] {
+				attrs = append(attrs, "audit", true, "arguments", req.Params.Arguments)
+			}
+
 			switch {
 			case err != nil:
 				slog.Error("tool call failed", append(attrs, "error", err)...)
@@ -72,6 +103,35 @@ func toolMiddleware(d time.Duration) server.ToolHandlerMiddleware {
 	}
 }
 
+// concurrencyMiddleware limits the number of tool handlers running
+// concurrently. It uses a buffered channel as a semaphore and respects
+// context cancellation while waiting for a slot.
+func concurrencyMiddleware(maxConcurrent int) server.ToolHandlerMiddleware {
+	sem := make(chan struct{}, maxConcurrent)
+	return func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
+		return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+				return next(ctx, req)
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+	}
+}
+
+// chainMiddleware composes multiple middlewares into one. The first middleware
+// in the list is outermost (executed first).
+func chainMiddleware(middlewares ...server.ToolHandlerMiddleware) server.ToolHandlerMiddleware {
+	return func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
+		for i := len(middlewares) - 1; i >= 0; i-- {
+			next = middlewares[i](next)
+		}
+		return next
+	}
+}
+
 func generateRequestID() string {
 	b := make([]byte, 4)
 	_, _ = rand.Read(b)
@@ -79,7 +139,7 @@ func generateRequestID() string {
 }
 
 func main() {
-	setupLogger()
+	opts := setupLogger()
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -87,10 +147,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Shared rate limiter for both REST and Sync clients
+	installRedaction(opts, []string{cfg.TodoistAPIToken})
+
+	// Shared rate limiter and circuit breaker for both REST and Sync clients
 	rl := todoist.NewRateLimiter(15*time.Minute, 450)
-	todoistClient := todoist.NewClient(cfg.TodoistAPIToken, rl)
-	todoistSyncClient := todoist.NewSyncClient(cfg.TodoistAPIToken, rl)
+	cb := todoist.NewCircuitBreaker(5, 30*time.Second)
+	todoistClient := todoist.NewClient(cfg.TodoistAPIToken, rl, cb)
+	todoistSyncClient := todoist.NewSyncClient(cfg.TodoistAPIToken, rl, cb)
 
 	ctx := context.Background()
 	if err := todoistClient.TestConnection(ctx); err != nil {
@@ -103,7 +166,10 @@ func main() {
 		version,
 		server.WithToolCapabilities(false),
 		server.WithRecovery(),
-		server.WithToolHandlerMiddleware(toolMiddleware(30*time.Second)),
+		server.WithToolHandlerMiddleware(chainMiddleware(
+			concurrencyMiddleware(10),
+			toolMiddleware(30*time.Second),
+		)),
 	)
 
 	// ── Task tools ──────────────────────────────────────────────────────

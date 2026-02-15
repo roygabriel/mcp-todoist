@@ -304,6 +304,41 @@ func TestUpdateTaskHandler(t *testing.T) {
 			wantErr:   true,
 			errSubstr: "contains invalid characters",
 		},
+		{
+			name: "all optional fields",
+			args: map[string]interface{}{
+				"task_id":       "123",
+				"content":       "Updated",
+				"description":   "Desc",
+				"labels":        []interface{}{"a", "b"},
+				"priority":      float64(2),
+				"due_string":    "tomorrow",
+				"due_date":      "2026-01-01",
+				"due_datetime":  "2026-01-01T12:00:00Z",
+				"assignee_id":   "user1",
+				"duration":      float64(30),
+				"duration_unit": "minute",
+				"deadline_date": "2026-02-01",
+			},
+			mockPost: func(_ context.Context, _ string, _ interface{}) ([]byte, error) {
+				return json.Marshal(map[string]interface{}{"id": "123", "content": "Updated"})
+			},
+		},
+		{
+			name: "API error",
+			args: map[string]interface{}{"task_id": "123", "content": "x"},
+			mockPost: func(_ context.Context, _ string, _ interface{}) ([]byte, error) {
+				return nil, fmt.Errorf("server error")
+			},
+			wantErr:   true,
+			errSubstr: "failed to update task",
+		},
+		{
+			name:      "priority too low",
+			args:      map[string]interface{}{"task_id": "123", "priority": float64(0)},
+			wantErr:   true,
+			errSubstr: "priority must be between",
+		},
 	}
 
 	for _, tt := range tests {
@@ -824,6 +859,74 @@ func TestBatchCreateTasksHandler(t *testing.T) {
 			wantErr:   true,
 			errSubstr: "failed to batch create tasks",
 		},
+		{
+			name: "with all optional fields",
+			args: map[string]interface{}{
+				"tasks": []interface{}{
+					map[string]interface{}{
+						"content":     "Task 1",
+						"description": "Desc",
+						"project_id":  "proj1",
+						"section_id":  "sec1",
+						"labels":      []interface{}{"work"},
+						"priority":    float64(3),
+						"due_string":  "tomorrow",
+						"due_date":    "2026-01-01",
+						"parent_id":   "existing_parent",
+					},
+				},
+			},
+			mockBatch: func(_ context.Context, commands []todoist.Command) (*todoist.SyncResponse, error) {
+				status := make(map[string]interface{})
+				mapping := make(map[string]string)
+				for _, cmd := range commands {
+					status[cmd.UUID] = "ok"
+					mapping[cmd.TempID] = "real-id"
+				}
+				return &todoist.SyncResponse{SyncStatus: status, TempIDMapping: mapping}, nil
+			},
+		},
+		{
+			name: "parent-child with temp_id",
+			args: map[string]interface{}{
+				"tasks": []interface{}{
+					map[string]interface{}{"content": "Parent"},
+					map[string]interface{}{"content": "Child", "parent_temp_id": "0"},
+				},
+			},
+			mockBatch: func(_ context.Context, commands []todoist.Command) (*todoist.SyncResponse, error) {
+				status := make(map[string]interface{})
+				mapping := make(map[string]string)
+				for _, cmd := range commands {
+					status[cmd.UUID] = "ok"
+					mapping[cmd.TempID] = "real-" + cmd.TempID[:8]
+				}
+				return &todoist.SyncResponse{SyncStatus: status, TempIDMapping: mapping}, nil
+			},
+		},
+		{
+			name: "partial failure",
+			args: map[string]interface{}{
+				"tasks": []interface{}{
+					map[string]interface{}{"content": "Task 1"},
+					map[string]interface{}{"content": "Task 2"},
+				},
+			},
+			mockBatch: func(_ context.Context, commands []todoist.Command) (*todoist.SyncResponse, error) {
+				status := make(map[string]interface{})
+				status[commands[0].UUID] = "ok"
+				status[commands[1].UUID] = map[string]interface{}{"error": "failed"}
+				return &todoist.SyncResponse{SyncStatus: status, TempIDMapping: map[string]string{commands[0].TempID: "real-1"}}, nil
+			},
+		},
+		{
+			name: "invalid task object",
+			args: map[string]interface{}{
+				"tasks": []interface{}{"not a map"},
+			},
+			wantErr:   true,
+			errSubstr: "not a valid object",
+		},
 	}
 
 	for _, tt := range tests {
@@ -891,6 +994,103 @@ func TestMoveTasksHandler(t *testing.T) {
 			args:      map[string]interface{}{"to_project_id": "proj1"},
 			wantErr:   true,
 			errSubstr: "either task_ids or filter must be provided",
+		},
+		{
+			name: "filter-based move",
+			args: map[string]interface{}{
+				"filter":        "today",
+				"to_project_id": "proj1",
+			},
+			mockGet: func(_ context.Context, path string) ([]byte, error) {
+				if strings.Contains(path, "filter=") {
+					return json.Marshal([]map[string]interface{}{
+						{"id": "1"}, {"id": "2"},
+					})
+				}
+				return json.Marshal(map[string]interface{}{"id": "proj1", "name": "Dest"})
+			},
+			mockPost: func(_ context.Context, _ string, _ interface{}) ([]byte, error) {
+				return json.Marshal(map[string]interface{}{"id": "1"})
+			},
+		},
+		{
+			name: "batch path with >5 tasks",
+			args: map[string]interface{}{
+				"task_ids":      []interface{}{"1", "2", "3", "4", "5", "6"},
+				"to_project_id": "proj1",
+			},
+			mockGet: func(_ context.Context, _ string) ([]byte, error) {
+				return json.Marshal(map[string]interface{}{"id": "proj1", "name": "Dest"})
+			},
+			mockBatch: func(_ context.Context, commands []todoist.Command) (*todoist.SyncResponse, error) {
+				status := make(map[string]interface{})
+				for _, cmd := range commands {
+					status[cmd.UUID] = "ok"
+				}
+				return &todoist.SyncResponse{SyncStatus: status}, nil
+			},
+		},
+		{
+			name: "batch path partial failure",
+			args: map[string]interface{}{
+				"task_ids":      []interface{}{"1", "2", "3", "4", "5", "6"},
+				"to_project_id": "proj1",
+			},
+			mockGet: func(_ context.Context, _ string) ([]byte, error) {
+				return json.Marshal(map[string]interface{}{"id": "proj1", "name": "Dest"})
+			},
+			mockBatch: func(_ context.Context, commands []todoist.Command) (*todoist.SyncResponse, error) {
+				status := make(map[string]interface{})
+				for i, cmd := range commands {
+					if i == 0 {
+						status[cmd.UUID] = map[string]interface{}{"error": "fail"}
+					} else {
+						status[cmd.UUID] = "ok"
+					}
+				}
+				return &todoist.SyncResponse{SyncStatus: status}, nil
+			},
+		},
+		{
+			name: "batch API error",
+			args: map[string]interface{}{
+				"task_ids":      []interface{}{"1", "2", "3", "4", "5", "6"},
+				"to_project_id": "proj1",
+			},
+			mockGet: func(_ context.Context, _ string) ([]byte, error) {
+				return json.Marshal(map[string]interface{}{"id": "proj1", "name": "Dest"})
+			},
+			mockBatch: func(_ context.Context, _ []todoist.Command) (*todoist.SyncResponse, error) {
+				return nil, fmt.Errorf("network error")
+			},
+			wantErr:   true,
+			errSubstr: "failed to batch move tasks",
+		},
+		{
+			name: "REST path with post failure",
+			args: map[string]interface{}{
+				"task_ids":      []interface{}{"1", "2"},
+				"to_project_id": "proj1",
+			},
+			mockGet: func(_ context.Context, _ string) ([]byte, error) {
+				return json.Marshal(map[string]interface{}{"id": "proj1", "name": "Dest"})
+			},
+			mockPost: func(_ context.Context, _ string, _ interface{}) ([]byte, error) {
+				return nil, fmt.Errorf("fail")
+			},
+		},
+		{
+			name: "project lookup fails gracefully",
+			args: map[string]interface{}{
+				"task_ids":      []interface{}{"1"},
+				"to_project_id": "proj1",
+			},
+			mockGet: func(_ context.Context, _ string) ([]byte, error) {
+				return nil, fmt.Errorf("not found")
+			},
+			mockPost: func(_ context.Context, _ string, _ interface{}) ([]byte, error) {
+				return json.Marshal(map[string]interface{}{"id": "1"})
+			},
 		},
 	}
 

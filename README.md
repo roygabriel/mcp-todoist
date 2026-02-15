@@ -1,6 +1,6 @@
 # Todoist MCP Server
 
-A Model Context Protocol (MCP) server that connects to Todoist using their official REST API v2. This server enables AI assistants like Claude to interact with your Todoist account - manage tasks, projects, sections, labels, and comments.
+A Model Context Protocol (MCP) server that connects to Todoist using their official REST API v2. This server enables MCP-compatible clients to interact with your Todoist account - manage tasks, projects, sections, labels, and comments.
 
 Built with Go using the official [mcp-go SDK](https://mcp-go.dev) and works on all operating systems (Linux, Windows, macOS).
 
@@ -17,13 +17,20 @@ Built with Go using the official [mcp-go SDK](https://mcp-go.dev) and works on a
 - **Natural Language Dates** - Use natural language for due dates ("tomorrow at 3pm", "every monday")
 - **Advanced Filters** - Search tasks using Todoist's powerful filter syntax
 - **Priority Management** - Set task priorities from p1 (urgent) to p4 (normal)
-- **Rate Limiting** - Built-in rate limit tracking (450 requests per 15 minutes)
+- **Rate Limiting** - Built-in sliding window rate limiter (450 requests per 15 minutes)
+- **Circuit Breaker** - Automatic fail-fast after repeated upstream failures, with self-healing recovery
+- **Concurrency Control** - Bounded concurrent tool execution to prevent resource exhaustion
+- **Secret Redaction** - API tokens are automatically scrubbed from all log output
+- **Audit Logging** - Destructive operations are logged with full arguments for traceability
+- **Hardened Transport** - Granular HTTP timeouts (dial, TLS, response header) and response body size limits
+- **Retry with Backoff** - Automatic exponential backoff on transient failures with context-aware cancellation
+- **Structured Logging** - JSON-formatted logs with correlation IDs, tool names, and durations via `slog`
 - **Cross-Platform** - Works on Linux, Windows, and macOS
 - **Secure** - Uses API tokens (never your password)
 
 ## Prerequisites
 
-- **Go 1.21 or higher** - [Install Go](https://go.dev/doc/install)
+- **Go 1.25 or higher** - [Install Go](https://go.dev/doc/install)
 - **Todoist Account** - Free or premium account at [todoist.com](https://todoist.com)
 - **API Token** - Personal API token from your Todoist account (see setup below)
 
@@ -80,6 +87,7 @@ TODOIST_API_TOKEN=your_api_token_here
 **Environment Variables:**
 
 - `TODOIST_API_TOKEN` (required) - Your Todoist API token from https://todoist.com/prefs/integrations
+- `LOG_LEVEL` (optional) - Log verbosity: `DEBUG`, `INFO` (default), `WARN`, or `ERROR`
 
 ## Usage with Claude Desktop
 
@@ -137,6 +145,32 @@ Edit `~/.config/claude/claude_desktop_config.json`:
 ```
 
 After adding the configuration, restart Claude Desktop.
+
+## Usage with Claude Code CLI
+
+Add the server using the `claude mcp add` command:
+
+```bash
+claude mcp add todoist -- /path/to/mcp-todoist
+```
+
+Set the API token as an environment variable before launching Claude Code, or export it in your shell profile:
+
+```bash
+export TODOIST_API_TOKEN="your_api_token_here"
+```
+
+Alternatively, add it with an explicit environment variable using a wrapper script:
+
+```bash
+claude mcp add todoist -- env TODOIST_API_TOKEN=your_api_token_here /path/to/mcp-todoist
+```
+
+To verify the server is registered:
+
+```bash
+claude mcp list
+```
 
 ## Available Tools
 
@@ -517,7 +551,7 @@ List all projects.
 }
 ```
 
-#### 13. create_project
+#### 14. create_project
 
 Create a new project.
 
@@ -538,7 +572,7 @@ Create a new project.
 }
 ```
 
-#### 14. get_project
+#### 15. get_project
 
 Get details for a single project.
 
@@ -578,7 +612,7 @@ Create a new section in a project.
 - `project_id` (required) - Project ID
 - `order` (optional) - Section order
 
-#### 19. update_section
+#### 20. update_section
 
 Update a section name.
 
@@ -586,7 +620,7 @@ Update a section name.
 - `section_id` (required) - Section ID to update
 - `name` (required) - New section name
 
-#### 20. delete_section
+#### 21. delete_section
 
 Delete a section.
 
@@ -742,6 +776,7 @@ The Todoist API has different rate limits depending on which endpoint is used:
 - Automatically used by:
   - `bulk_complete_tasks` - when completing more than 5 tasks
   - `batch_create_tasks` - for creating multiple tasks at once
+  - `move_tasks` - when moving more than 5 tasks
 - Benefits: 100 tasks completed = 1 API request instead of 100
 
 **Example efficiency gains:**
@@ -783,6 +818,19 @@ go build -o mcp-todoist
 GOOS=linux GOARCH=amd64 go build -o mcp-todoist-linux
 GOOS=darwin GOARCH=arm64 go build -o mcp-todoist-macos
 GOOS=windows GOARCH=amd64 go build -o mcp-todoist-windows.exe
+```
+
+### Testing
+
+```bash
+# Run all tests with race detector
+go test -race ./...
+
+# Run linter
+golangci-lint run ./...
+
+# Check for vulnerabilities
+govulncheck ./...
 ```
 
 ### Testing with MCP Inspector
@@ -842,28 +890,40 @@ npx @modelcontextprotocol/inspector mcp-todoist
 **Solutions:**
 - Check your internet connection
 - Todoist API servers may be temporarily unavailable
-- The server has a 30-second timeout - wait and retry
+- The server enforces granular timeouts (5s dial, 5s TLS handshake, 5s response headers, 30s overall)
+- Transient failures are retried automatically with exponential backoff (up to 3 attempts)
+- If the API is fully down, the circuit breaker will open after 5 consecutive failures and reject requests immediately for 30 seconds before probing again
 - Try accessing todoist.com in your browser to verify service status
 
 ## Architecture
 
 The server consists of:
 
-- **REST API Client** (`todoist/client.go`) - HTTP client wrapper for REST API v2 with rate limiting
-- **Sync API Client** (`todoist/sync_client.go`) - Sync API v1 client for command batching
-- **Configuration** (`config/config.go`) - Environment variable loading and validation
+- **REST API Client** (`todoist/client.go`) - HTTP client wrapper for REST API v2 with rate limiting, circuit breaker, and retry
+- **Sync API Client** (`todoist/sync_client.go`) - Sync API v1 client for command batching with shared resilience primitives
+- **HTTP Transport** (`todoist/transport.go`) - Shared hardened transport with granular timeouts and response body size limits
+- **Circuit Breaker** (`todoist/circuit_breaker.go`) - Three-state breaker (Closed/Open/HalfOpen) shared across both clients
+- **Rate Limiter** (`todoist/rate_limiter.go`) - Sliding-window rate limiter (450 requests per 15 minutes)
+- **Configuration** (`config/config.go`) - Environment variable loading and validation with `file://` secret support
 - **Tool Handlers** (`tools/*.go`) - MCP tool implementations for each operation
-- **Main Server** (`main.go`) - MCP server initialization and tool registration
+- **Middleware** (`main.go`) - Concurrency cap, tool timeouts, structured logging, audit logging, and panic recovery
+- **Secret Redaction** (`redact.go`) - Custom `slog.Handler` that scrubs API tokens from all log output
 
 The server intelligently uses both APIs:
 - **REST API v2** for individual operations (search, get, create, update, delete)
 - **Sync API v1 batching** for bulk operations (bulk_complete_tasks with >5 tasks, batch_create_tasks)
 
+Middleware is applied in this order (outermost first):
+1. **Concurrency cap** (10 concurrent tool calls)
+2. **Timeout + logging + audit** (30s deadline, correlation IDs, audit trail for destructive ops)
+3. **Panic recovery** (built into the SDK)
+
 ## Dependencies
 
-- [mcp-go](https://github.com/mark3labs/mcp-go) v0.43.2 - Official MCP Go SDK
+- [mcp-go](https://github.com/mark3labs/mcp-go) v0.43.2 - MCP Go SDK
 - [godotenv](https://github.com/joho/godotenv) v1.5.1 - Environment variable loader
-- Go standard library - `net/http`, `encoding/json`, `context`
+- [uuid](https://github.com/google/uuid) v1.6.0 - UUID generation for Sync API command idempotency
+- Go standard library - `net/http`, `encoding/json`, `context`, `log/slog`
 
 ## Security Considerations
 
@@ -872,7 +932,11 @@ The server intelligently uses both APIs:
 - You can regenerate your token at any time from https://todoist.com/prefs/integrations
 - The server runs locally and doesn't send data to third parties
 - All communication with Todoist uses HTTPS (TLS encryption)
-- Store your token securely using environment variables or secret management
+- Store your token securely using environment variables or `file://` paths for mounted secrets
+- **Secret redaction** ensures API tokens are replaced with `[REDACTED]` in all log output (messages, attributes, nested groups)
+- **Audit logging** records destructive operations (`delete_*`, `bulk_complete_tasks`, `batch_create_tasks`, `move_tasks`) with full request arguments for post-incident review
+- Response bodies are capped at 10 MB to prevent memory exhaustion from malformed responses
+- Input validation is enforced at the schema level (min length, enums, patterns) and via custom validators
 
 ## License
 
