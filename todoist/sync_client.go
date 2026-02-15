@@ -5,10 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -44,12 +42,8 @@ type SyncResponse struct {
 func NewSyncClient(apiToken string, rl *RateLimiter) *SyncClient {
 	return &SyncClient{
 		httpClient: &http.Client{
-			Timeout: timeout,
-			Transport: &http.Transport{
-				MaxIdleConns:       10,
-				IdleConnTimeout:    30 * time.Second,
-				DisableCompression: false,
-			},
+			Timeout:   timeout,
+			Transport: newHTTPTransport(),
 		},
 		apiToken:    apiToken,
 		rateLimiter: rl,
@@ -95,9 +89,9 @@ func (sc *SyncClient) doBatchRequest(ctx context.Context, commands []Command) (*
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readResponseBody(resp.Body)
 	if err != nil {
-		return nil, &RetryableError{err: fmt.Errorf("failed to read response: %w", err)}
+		return nil, err
 	}
 
 	if resp.StatusCode >= 400 {

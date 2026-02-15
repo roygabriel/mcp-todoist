@@ -28,12 +28,8 @@ type Client struct {
 func NewClient(apiToken string, rl *RateLimiter) *Client {
 	return &Client{
 		httpClient: &http.Client{
-			Timeout: timeout,
-			Transport: &http.Transport{
-				MaxIdleConns:       10,
-				IdleConnTimeout:    30 * time.Second,
-				DisableCompression: false,
-			},
+			Timeout:   timeout,
+			Transport: newHTTPTransport(),
 		},
 		apiToken:    apiToken,
 		rateLimiter: rl,
@@ -72,9 +68,9 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readResponseBody(resp.Body)
 	if err != nil {
-		return nil, &RetryableError{err: fmt.Errorf("failed to read response: %w", err)}
+		return nil, err
 	}
 
 	if resp.StatusCode >= 400 {
