@@ -19,22 +19,49 @@ import (
 
 var version = "dev"
 
-func setupLogger() {
-	level := slog.LevelInfo
+func logLevel() slog.Level {
 	switch strings.ToUpper(os.Getenv("LOG_LEVEL")) {
 	case "DEBUG":
-		level = slog.LevelDebug
+		return slog.LevelDebug
 	case "WARN":
-		level = slog.LevelWarn
+		return slog.LevelWarn
 	case "ERROR":
-		level = slog.LevelError
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
 	}
-	handler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level})
-	slog.SetDefault(slog.New(handler))
 }
 
-// toolMiddleware wraps every tool handler with a context deadline and structured
-// logging (tool name, duration, request ID, and success/error status).
+func setupLogger() *slog.HandlerOptions {
+	opts := &slog.HandlerOptions{Level: logLevel()}
+	handler := slog.NewJSONHandler(os.Stderr, opts)
+	slog.SetDefault(slog.New(handler))
+	return opts
+}
+
+// installRedaction wraps the global logger with secret redaction. Must be
+// called after config is loaded so the API token is available.
+func installRedaction(opts *slog.HandlerOptions, secrets []string) {
+	base := slog.NewJSONHandler(os.Stderr, opts)
+	slog.SetDefault(slog.New(newRedactingHandler(base, secrets)))
+}
+
+// destructiveTools lists tools that permanently modify or delete data and
+// warrant audit-level logging.
+var destructiveTools = map[string]bool{
+	"delete_task":          true,
+	"delete_project":       true,
+	"delete_section":       true,
+	"delete_label":         true,
+	"delete_comment":       true,
+	"bulk_complete_tasks":  true,
+	"batch_create_tasks":   true,
+	"move_tasks":           true,
+}
+
+// toolMiddleware wraps every tool handler with a context deadline, structured
+// logging (tool name, duration, request ID, success/error status), and audit
+// logging for destructive operations.
 func toolMiddleware(d time.Duration) server.ToolHandlerMiddleware {
 	return func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
 		return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -58,6 +85,10 @@ func toolMiddleware(d time.Duration) server.ToolHandlerMiddleware {
 				"duration_ms", duration.Milliseconds(),
 			}
 
+			if destructiveTools[req.Params.Name] {
+				attrs = append(attrs, "audit", true, "arguments", req.Params.Arguments)
+			}
+
 			switch {
 			case err != nil:
 				slog.Error("tool call failed", append(attrs, "error", err)...)
@@ -79,13 +110,15 @@ func generateRequestID() string {
 }
 
 func main() {
-	setupLogger()
+	opts := setupLogger()
 
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("configuration error", "error", err)
 		os.Exit(1)
 	}
+
+	installRedaction(opts, []string{cfg.TodoistAPIToken})
 
 	// Shared rate limiter for both REST and Sync clients
 	rl := todoist.NewRateLimiter(15*time.Minute, 450)
