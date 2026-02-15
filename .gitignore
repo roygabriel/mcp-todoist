@@ -30,5 +30,6 @@ go.work
 .DS_Store
 Thumbs.db
 
-# Docs
-docs/
+# Docs (working notes are local-only, but published docs are tracked)
+docs/*
+!docs/mcp-server-hardening-checklist.md
