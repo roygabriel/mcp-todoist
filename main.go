@@ -120,10 +120,11 @@ func main() {
 
 	installRedaction(opts, []string{cfg.TodoistAPIToken})
 
-	// Shared rate limiter for both REST and Sync clients
+	// Shared rate limiter and circuit breaker for both REST and Sync clients
 	rl := todoist.NewRateLimiter(15*time.Minute, 450)
-	todoistClient := todoist.NewClient(cfg.TodoistAPIToken, rl)
-	todoistSyncClient := todoist.NewSyncClient(cfg.TodoistAPIToken, rl)
+	cb := todoist.NewCircuitBreaker(5, 30*time.Second)
+	todoistClient := todoist.NewClient(cfg.TodoistAPIToken, rl, cb)
+	todoistSyncClient := todoist.NewSyncClient(cfg.TodoistAPIToken, rl, cb)
 
 	ctx := context.Background()
 	if err := todoistClient.TestConnection(ctx); err != nil {

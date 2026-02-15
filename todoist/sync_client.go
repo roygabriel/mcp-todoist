@@ -20,6 +20,7 @@ type SyncClient struct {
 	httpClient  *http.Client
 	apiToken    string
 	rateLimiter *RateLimiter
+	breaker     *CircuitBreaker
 }
 
 // Command represents a Sync API command.
@@ -38,8 +39,9 @@ type SyncResponse struct {
 	FullSync      bool                   `json:"full_sync"`
 }
 
-// NewSyncClient creates a new Todoist Sync API client with a shared rate limiter.
-func NewSyncClient(apiToken string, rl *RateLimiter) *SyncClient {
+// NewSyncClient creates a new Todoist Sync API client with a shared rate limiter
+// and circuit breaker.
+func NewSyncClient(apiToken string, rl *RateLimiter, cb *CircuitBreaker) *SyncClient {
 	return &SyncClient{
 		httpClient: &http.Client{
 			Timeout:   timeout,
@@ -47,6 +49,7 @@ func NewSyncClient(apiToken string, rl *RateLimiter) *SyncClient {
 		},
 		apiToken:    apiToken,
 		rateLimiter: rl,
+		breaker:     cb,
 	}
 }
 
@@ -63,12 +66,19 @@ func (sc *SyncClient) BatchCommands(ctx context.Context, commands []Command) (*S
 }
 
 func (sc *SyncClient) doBatchRequest(ctx context.Context, commands []Command) (*SyncResponse, error) {
+	done, err := sc.breaker.Allow()
+	if err != nil {
+		return nil, err
+	}
+
 	if err := sc.rateLimiter.Check(); err != nil {
+		done(true) // rate limit is local, not an upstream failure
 		return nil, err
 	}
 
 	commandsJSON, err := json.Marshal(commands)
 	if err != nil {
+		done(true)
 		return nil, fmt.Errorf("failed to marshal commands: %w", err)
 	}
 
@@ -77,6 +87,7 @@ func (sc *SyncClient) doBatchRequest(ctx context.Context, commands []Command) (*
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, syncBaseURL, bytes.NewBufferString(formData.Encode()))
 	if err != nil {
+		done(true)
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
@@ -85,15 +96,23 @@ func (sc *SyncClient) doBatchRequest(ctx context.Context, commands []Command) (*
 
 	resp, err := sc.httpClient.Do(req)
 	if err != nil {
+		done(false) // connection failure counts as breaker failure
 		return nil, &RetryableError{err: fmt.Errorf("request failed: %w", err)}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := readResponseBody(resp.Body)
 	if err != nil {
+		done(false)
 		return nil, err
 	}
 
+	if resp.StatusCode >= 500 {
+		done(false) // 5xx counts as breaker failure
+		return nil, handleHTTPError(resp.StatusCode, respBody)
+	}
+
+	done(true) // 4xx is not a breaker failure
 	if resp.StatusCode >= 400 {
 		return nil, handleHTTPError(resp.StatusCode, respBody)
 	}

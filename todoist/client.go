@@ -22,10 +22,12 @@ type Client struct {
 	httpClient  *http.Client
 	apiToken    string
 	rateLimiter *RateLimiter
+	breaker     *CircuitBreaker
 }
 
-// NewClient creates a new Todoist API client with a shared rate limiter.
-func NewClient(apiToken string, rl *RateLimiter) *Client {
+// NewClient creates a new Todoist API client with a shared rate limiter and
+// circuit breaker.
+func NewClient(apiToken string, rl *RateLimiter, cb *CircuitBreaker) *Client {
 	return &Client{
 		httpClient: &http.Client{
 			Timeout:   timeout,
@@ -33,12 +35,19 @@ func NewClient(apiToken string, rl *RateLimiter) *Client {
 		},
 		apiToken:    apiToken,
 		rateLimiter: rl,
+		breaker:     cb,
 	}
 }
 
 // doRequest performs an HTTP request with proper headers and error handling.
 func (c *Client) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, error) {
+	done, err := c.breaker.Allow()
+	if err != nil {
+		return nil, err
+	}
+
 	if err := c.rateLimiter.Check(); err != nil {
+		done(true) // rate limit is local, not an upstream failure
 		return nil, err
 	}
 
@@ -46,6 +55,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 	if body != nil {
 		jsonData, err := json.Marshal(body)
 		if err != nil {
+			done(true)
 			return nil, fmt.Errorf("failed to marshal request body: %w", err)
 		}
 		reqBody = bytes.NewBuffer(jsonData)
@@ -54,6 +64,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 	url := baseURL + path
 	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
 	if err != nil {
+		done(true)
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
@@ -64,15 +75,23 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		done(false) // connection failure counts as breaker failure
 		return nil, &RetryableError{err: fmt.Errorf("request failed: %w", err)}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := readResponseBody(resp.Body)
 	if err != nil {
+		done(false)
 		return nil, err
 	}
 
+	if resp.StatusCode >= 500 {
+		done(false) // 5xx counts as breaker failure
+		return nil, handleHTTPError(resp.StatusCode, respBody)
+	}
+
+	done(true) // 4xx is not a breaker failure
 	if resp.StatusCode >= 400 {
 		return nil, handleHTTPError(resp.StatusCode, respBody)
 	}
