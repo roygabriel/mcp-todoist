@@ -5,10 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -22,6 +20,7 @@ type SyncClient struct {
 	httpClient  *http.Client
 	apiToken    string
 	rateLimiter *RateLimiter
+	breaker     *CircuitBreaker
 }
 
 // Command represents a Sync API command.
@@ -40,19 +39,17 @@ type SyncResponse struct {
 	FullSync      bool                   `json:"full_sync"`
 }
 
-// NewSyncClient creates a new Todoist Sync API client with a shared rate limiter.
-func NewSyncClient(apiToken string, rl *RateLimiter) *SyncClient {
+// NewSyncClient creates a new Todoist Sync API client with a shared rate limiter
+// and circuit breaker.
+func NewSyncClient(apiToken string, rl *RateLimiter, cb *CircuitBreaker) *SyncClient {
 	return &SyncClient{
 		httpClient: &http.Client{
-			Timeout: timeout,
-			Transport: &http.Transport{
-				MaxIdleConns:       10,
-				IdleConnTimeout:    30 * time.Second,
-				DisableCompression: false,
-			},
+			Timeout:   timeout,
+			Transport: newHTTPTransport(),
 		},
 		apiToken:    apiToken,
 		rateLimiter: rl,
+		breaker:     cb,
 	}
 }
 
@@ -69,12 +66,19 @@ func (sc *SyncClient) BatchCommands(ctx context.Context, commands []Command) (*S
 }
 
 func (sc *SyncClient) doBatchRequest(ctx context.Context, commands []Command) (*SyncResponse, error) {
+	done, err := sc.breaker.Allow()
+	if err != nil {
+		return nil, err
+	}
+
 	if err := sc.rateLimiter.Check(); err != nil {
+		done(true) // rate limit is local, not an upstream failure
 		return nil, err
 	}
 
 	commandsJSON, err := json.Marshal(commands)
 	if err != nil {
+		done(true)
 		return nil, fmt.Errorf("failed to marshal commands: %w", err)
 	}
 
@@ -83,23 +87,32 @@ func (sc *SyncClient) doBatchRequest(ctx context.Context, commands []Command) (*
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, syncBaseURL, bytes.NewBufferString(formData.Encode()))
 	if err != nil {
+		done(true)
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Authorization", "Bearer "+sc.apiToken)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := sc.httpClient.Do(req)
+	resp, err := sc.httpClient.Do(req) // #nosec G704 -- URL is const syncBaseURL; no user-controlled input
 	if err != nil {
+		done(false) // connection failure counts as breaker failure
 		return nil, &RetryableError{err: fmt.Errorf("request failed: %w", err)}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readResponseBody(resp.Body)
 	if err != nil {
-		return nil, &RetryableError{err: fmt.Errorf("failed to read response: %w", err)}
+		done(false)
+		return nil, err
 	}
 
+	if resp.StatusCode >= 500 {
+		done(false) // 5xx counts as breaker failure
+		return nil, handleHTTPError(resp.StatusCode, respBody)
+	}
+
+	done(true) // 4xx is not a breaker failure
 	if resp.StatusCode >= 400 {
 		return nil, handleHTTPError(resp.StatusCode, respBody)
 	}

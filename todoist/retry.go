@@ -17,7 +17,10 @@ type RetryableError struct {
 	err error
 }
 
+// Error returns the underlying error message.
 func (e *RetryableError) Error() string { return e.err.Error() }
+
+// Unwrap returns the underlying error for errors.Is/As support.
 func (e *RetryableError) Unwrap() error { return e.err }
 
 // retryWithBackoff executes fn up to maxAttempts times with exponential backoff.

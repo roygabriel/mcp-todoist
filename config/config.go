@@ -29,7 +29,7 @@ func Load() (*Config, error) {
 	// Support loading token from a file (useful for Kubernetes secrets / Docker secrets)
 	if strings.HasPrefix(apiToken, "file://") {
 		path := filepath.Clean(strings.TrimPrefix(apiToken, "file://"))
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) // #nosec G703 -- path from operator-controlled env var after filepath.Clean; not user input
 		if err != nil {
 			return nil, fmt.Errorf("failed to read API token from file %s: %w", path, err)
 		}
